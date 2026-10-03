@@ -1,0 +1,81 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function isValidNote(data) {
+      return data.keys().hasAll(['id', 'studentName', 'subject', 'message', 'color', 'likes', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.studentName is string && data.studentName.size() <= 80
+        && data.subject is string && data.subject.size() <= 100
+        && data.message is string && data.message.size() <= 1000
+        && data.color in ['blush', 'sky', 'mint', 'sunshine', 'lilac', 'coral']
+        && data.likes is number
+        && data.createdAt is number;
+    }
+
+    function isValidLetter(data) {
+      return data.keys().hasAll(['id', 'recipientTeacherName', 'recipientSubject', 'studentName', 'title', 'body', 'createdAt', 'isRead'])
+        && data.id is string && data.id.size() <= 128
+        && data.recipientTeacherName is string && data.recipientTeacherName.size() <= 100
+        && data.recipientSubject is string && data.recipientSubject.size() <= 100
+        && data.studentName is string && data.studentName.size() <= 80
+        && data.title is string && data.title.size() <= 150
+        && data.body is string && data.body.size() <= 3500
+        && data.createdAt is number
+        && data.isRead is bool
+        && (!('attachedPhoto' in data) || (data.attachedPhoto is string && data.attachedPhoto.size() <= 6000000));
+    }
+
+    // Gratitude Wall notes collection
+    match /notes/{noteId} {
+      allow read: if true;
+      allow create: if isValidId(noteId) && isValidNote(request.resource.data);
+      allow update: if isValidId(noteId) && (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'teacherComment', 'teacherCommentAuthor', 'teacherCommentTime', 'status', 'flaggedReason'])
+      );
+      allow delete: if true;
+    }
+
+    // Photo Pinboard collection
+    match /photos/{photoId} {
+      allow read: if true;
+      allow write: if isValidId(photoId);
+    }
+
+    // Authorized Teachers collection
+    match /teachers/{teacherId} {
+      allow read: if true;
+      allow write: if isValidId(teacherId);
+    }
+
+    // Authorized Moderators collection
+    match /moderators/{moderatorId} {
+      allow read: if true;
+      allow write: if isValidId(moderatorId);
+    }
+
+    // Admin settings & security collection
+    match /admin_settings/{settingId} {
+      allow read, write: if isValidId(settingId);
+    }
+
+    // Formal Student Letters collection
+    match /letters/{letterId} {
+      allow read: if true;
+      allow create: if isValidId(letterId) && isValidLetter(request.resource.data);
+      allow update: if isValidId(letterId) && (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'isBookmarked', 'teacherReplyMessage', 'teacherReplyAuthor', 'teacherReplyTime'])
+      );
+      allow delete: if true;
+    }
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

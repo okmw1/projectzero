@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-fredoka: 'Fredoka', system-ui, -apple-system, sans-serif;
+  }
+
+  *, body, button, input, textarea, select, h1, h2, h3, h4, h5, h6, p, span, div, a, label {
+    font-family: var(--font-fredoka) !important;
+  }
+
+  body {
+    font-family: var(--font-fredoka) !important;
+    font-weight: 600;
+    background-color: #FDF2CA;
+    color: #2D2823;
+  }
+
+  h1, h2, h3, h4, .font-heading, button, label, .font-bold {
+    font-family: var(--font-fredoka) !important;
+    font-weight: 700 !important;
+  }
+
+  p, .font-body-serif {
+    font-family: var(--font-fredoka) !important;
+    font-weight: 600;
+  }
+}
+
+/* Card drop shadow matching the user's uploaded mockup */
+.board-card {
+  background: #FFFDF9;
+  border-radius: 28px;
+  box-shadow: 0 10px 30px -5px rgba(115, 85, 45, 0.08), 0 3px 10px -2px rgba(115, 85, 45, 0.04);
+}
+
+.note-card {
+  box-shadow: 0 6px 18px -4px rgba(85, 60, 30, 0.07), 0 2px 6px -1px rgba(85, 60, 30, 0.03);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease, border-color 0.2s ease;
+  will-change: transform, box-shadow;
+}
+
+.note-card:hover {
+  transform: translateY(-6px) scale(1.02);
+  box-shadow: 0 18px 36px -6px rgba(95, 65, 30, 0.15), 0 8px 16px -2px rgba(95, 65, 30, 0.08);
+}
+
+/* Dynamic subtle natural pinboard rotations */
+.note-tilt-0 { transform: rotate(-1.2deg); }
+.note-tilt-1 { transform: rotate(1.4deg); }
+.note-tilt-2 { transform: rotate(-0.8deg); }
+.note-tilt-3 { transform: rotate(1.1deg); }
+.note-tilt-4 { transform: rotate(-1.6deg); }
+.note-tilt-5 { transform: rotate(0.9deg); }
+
+.note-tilt-0:hover, .note-tilt-1:hover, .note-tilt-2:hover, .note-tilt-3:hover, .note-tilt-4:hover, .note-tilt-5:hover {
+  transform: translateY(-7px) rotate(0deg) scale(1.025);
+}
+
+/* Washi tape decorative strip on top of cards */
+.washi-tape {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70px;
+  height: 18px;
+  background-color: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(1px);
+  border: 1px dashed rgba(180, 150, 120, 0.45);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border-radius: 2px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Playful subtle wiggle on interaction */
+@keyframes noteWiggle {
+  0% { transform: rotate(0deg); }
+  25% { transform: rotate(-3deg) scale(1.02); }
+  50% { transform: rotate(3deg) scale(1.02); }
+  75% { transform: rotate(-1.5deg) scale(1.01); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+.animate-note-wiggle {
+  animation: noteWiggle 0.45s ease-in-out;
+}
+
+/* Staggered entrance pop for notes */
+@keyframes notePopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.9) translateY(18px);
+  }
+  65% {
+    transform: scale(1.03) translateY(-3px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-note-pop {
+  animation: notePopIn 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+
+/* Floating ambient bob */
+@keyframes gentleFloat {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-gentle-float {
+  animation: gentleFloat 4s ease-in-out infinite;
+}
+
+/* Heart like pop animation */
+@keyframes heartPulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.5);
+  }
+  70% {
+    transform: scale(0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-heart-pop {
+  animation: heartPulse 0.38s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Pushpin hover shine */
+.pushpin-pin {
+  transition: transform 0.25s ease;
+}
+
+.note-card:hover .pushpin-pin {
+  transform: scale(1.2) rotate(8deg);
+}
+
+/* Print Stylesheet */
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-page {
+    page-break-after: always;
+    break-after: page;
+    box-shadow: none !important;
+  }
+}

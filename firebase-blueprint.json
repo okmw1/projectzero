@@ -1,0 +1,241 @@
+{
+  "entities": {
+    "StudentNote": {
+      "title": "StudentNote",
+      "description": "Heartfelt student appreciation note for teachers",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique note identifier",
+          "maxLength": 128
+        },
+        "studentName": {
+          "type": "string",
+          "description": "Name or handle of student",
+          "maxLength": 60
+        },
+        "grade": {
+          "type": "string",
+          "description": "Grade or class of student",
+          "maxLength": 40
+        },
+        "subject": {
+          "type": "string",
+          "description": "Department or subject tribute is written for",
+          "maxLength": 80
+        },
+        "message": {
+          "type": "string",
+          "description": "Heartfelt thank you message",
+          "maxLength": 800
+        },
+        "color": {
+          "type": "string",
+          "description": "Post-it note pastel color token",
+          "enum": ["blush", "sky", "mint", "sunshine", "lilac", "coral"]
+        },
+        "likes": {
+          "type": "number",
+          "description": "Number of appreciation hearts"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Timestamp in milliseconds"
+        },
+        "isTeacherReply": {
+          "type": "boolean",
+          "description": "Whether message is an official teacher response"
+        }
+      },
+      "required": ["id", "studentName", "subject", "message", "color", "likes", "createdAt"]
+    },
+    "AuthorizedTeacher": {
+      "title": "AuthorizedTeacher",
+      "description": "Teacher profile granted login permissions by administrator",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "accessCode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "enum": ["approved", "pending"]
+        },
+        "requestedAt": {
+          "type": "string",
+          "maxLength": 40
+        }
+      },
+      "required": ["id", "name", "subject", "accessCode", "status"]
+    },
+    "StudentLetter": {
+      "title": "StudentLetter",
+      "description": "Long-form formal gratitude letter sent directly to a specific teacher mailbox",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "recipientTeacherName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "recipientSubject": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "studentName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "grade": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "templateType": {
+          "type": "string",
+          "enum": ["mentorship", "subject", "patience", "custom"]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 3500
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "isRead": {
+          "type": "boolean"
+        },
+        "isBookmarked": {
+          "type": "boolean"
+        },
+        "pinPreviewToWall": {
+          "type": "boolean"
+        },
+        "attachedPhoto": {
+          "type": "string",
+          "description": "Optional attached keepsake photo data URL"
+        }
+      },
+      "required": ["id", "recipientTeacherName", "recipientSubject", "studentName", "title", "body", "createdAt", "isRead"]
+    },
+    "AuthorizedModerator": {
+      "title": "AuthorizedModerator",
+      "description": "Faculty moderator appointed by the Head Administrator to review and moderate tributes",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "accessCode": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "assignedBy": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended"]
+        }
+      },
+      "required": ["id", "name", "accessCode", "status"]
+    },
+    "PhotoCard": {
+      "title": "PhotoCard",
+      "description": "Photo card pinned to the classroom appreciation pinboard",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "src": {
+          "type": "string"
+        },
+        "alt": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "scale": {
+          "type": "number"
+        },
+        "rotation": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "src", "caption"]
+    }
+  },
+  "firestore": {
+    "/notes/{noteId}": {
+      "schema": {
+        "$ref": "StudentNote"
+      },
+      "description": "Shared wall of Teacher's Day gratitude notes"
+    },
+    "/teachers/{teacherId}": {
+      "schema": {
+        "$ref": "AuthorizedTeacher"
+      },
+      "description": "Authorized teachers configured by administration"
+    },
+    "/moderators/{moderatorId}": {
+      "schema": {
+        "$ref": "AuthorizedModerator"
+      },
+      "description": "Authorized moderators appointed by the Head Administrator"
+    },
+    "/letters/{letterId}": {
+      "schema": {
+        "$ref": "StudentLetter"
+      },
+      "description": "Formal long-form letters sent to teacher mailboxes"
+    },
+    "/photos/{photoId}": {
+      "schema": {
+        "$ref": "PhotoCard"
+      },
+      "description": "Classroom photo cards on the appreciation pinboard"
+    },
+    "/admin_settings/{settingId}": {
+      "description": "System and admin settings storage"
+    }
+  }
+}

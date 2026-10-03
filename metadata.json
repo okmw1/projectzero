@@ -1,0 +1,6 @@
+{
+  "name": "For the teachers who help us shine",
+  "description": "A cheerful Teacher's Day keepsake from your students. Photos, memories, and student appreciation pinned together in one happy place with real-time sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
