@@ -17,7 +17,80 @@ async function startServer() {
   const app = express();
   const server = http.createServer(app);
 
+  // Security Headers Middleware (compatible with AI Studio cross-origin preview iframe)
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
+
+  app.get('/favicon.ico', (_req, res) => {
+    res.status(204).end();
+  });
+
   app.use(express.json({ limit: '10mb' }));
+
+  // Per-IP Sliding Window Anti-Spam Rate Limiter
+  const ipRequestTimestamps = new Map<string, number[]>();
+  const isRateLimitedIp = (req: Request, maxRequests = 25, windowMs = 10000): boolean => {
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req.socket.remoteAddress ||
+      'unknown';
+    const now = Date.now();
+    const recent = (ipRequestTimestamps.get(ip) || []).filter((t) => now - t < windowMs);
+    if (recent.length >= maxRequests) {
+      return true;
+    }
+    recent.push(now);
+    ipRequestTimestamps.set(ip, recent);
+    return false;
+  };
+
+  // XSS & Script Injection Detector & Sanitizer
+  const containsMaliciousScript = (val: unknown): boolean => {
+    if (typeof val !== 'string') return false;
+    return /<\s*script|javascript:|onerror\s*=|onload\s*=|<\s*iframe|<\s*object/i.test(val);
+  };
+
+  const sanitizeString = (val: unknown, maxLen = 2000): string => {
+    if (typeof val !== 'string') return '';
+    return val
+      .replace(/<\s*script[^>]*>[\s\S]*?<\s*\/\s*script\s*>/gi, '')
+      .replace(/<[^>]+>/g, '')
+      .trim()
+      .slice(0, maxLen);
+  };
+
+  const ALLOWED_REALTIME_EVENTS = new Set([
+    'NOTE_ADDED',
+    'NOTE_FLAGGED',
+    'SUBMISSION_BLOCKED',
+    'NOTE_LIKED',
+    'NOTE_DELETED',
+    'NOTE_COMMENTED',
+    'TEACHER_REPLY',
+    'LETTER_SENT',
+    'LETTER_UPDATED',
+    'LETTER_REPLIED',
+    'LETTER_DELETED',
+    'LETTER_READ',
+    'LETTER_BOOKMARKED',
+    'PHOTO_ADDED',
+    'PHOTO_REMOVED',
+    'MAINTENANCE_UPDATED',
+    'ANNOUNCEMENT_UPDATED',
+    'ANNOUNCEMENT_COMMENT_ADDED',
+    'ANNOUNCEMENT_COMMENT_DELETED',
+    'TRIBUTE_COMMENT_ADDED',
+    'TRIBUTE_COMMENT_DELETED',
+    'SUGGESTION_ADDED',
+    'SUGGESTION_DELETED',
+    'PRESENCE_UPDATE',
+    'USER_JOINED',
+    'PING',
+    'PONG',
+  ]);
 
   // WebSocket Server for Realtime Communication (configured for high concurrency)
   const wss = new WebSocketServer({
@@ -121,6 +194,9 @@ async function startServer() {
         clientMsgTimestamps.set(ws, timestamps);
 
         const parsed = JSON.parse(data.toString());
+        if (!parsed || typeof parsed.type !== 'string' || !ALLOWED_REALTIME_EVENTS.has(parsed.type)) {
+          return;
+        }
         if (parsed.type === 'PING') {
           ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
           return;
@@ -190,17 +266,42 @@ async function startServer() {
     }
   }, 20000);
 
-  // POST /api/moderate/note - Server-side profanity detection & moderation middleware
+  // POST /api/moderate/note - Server-side profanity & XSS detection middleware
   app.post('/api/moderate/note', (req: Request, res: Response) => {
-    const { studentName, grade, subject, message } = req.body;
-    const moderation = evaluateProfanity({ studentName, grade, subject, message });
+    if (isRateLimitedIp(req, 15, 10000)) {
+      return res.status(429).json({
+        success: false,
+        status: 'blocked',
+        error: 'Too many requests. Please wait a few seconds before submitting again.',
+      });
+    }
+
+    const { studentName, grade, subject, message } = req.body || {};
+    if (
+      containsMaliciousScript(studentName) ||
+      containsMaliciousScript(grade) ||
+      containsMaliciousScript(subject) ||
+      containsMaliciousScript(message)
+    ) {
+      return res.status(400).json({
+        success: false,
+        status: 'blocked',
+        error: 'Security alert: HTML scripts or unsafe tags are not permitted.',
+      });
+    }
+
+    const moderation = evaluateProfanity({
+      studentName: sanitizeString(studentName, 100),
+      grade: sanitizeString(grade, 80),
+      subject: sanitizeString(subject, 100),
+      message: sanitizeString(message, 4500),
+    });
 
     if (!moderation.allowed) {
-      // Automatically prevent submission
       broadcastRealtime({
         type: 'SUBMISSION_BLOCKED',
         target: 'note',
-        studentName: studentName || 'Student',
+        studentName: sanitizeString(studentName, 80) || 'Student',
         reason: moderation.reason,
         timestamp: Date.now(),
       });
@@ -216,12 +317,11 @@ async function startServer() {
 
     const noteStatus = moderation.status; // 'approved' or 'flagged'
 
-    // Realtime notification
     broadcastRealtime({
       type: noteStatus === 'flagged' ? 'NOTE_FLAGGED' : 'NOTE_APPROVED',
       status: noteStatus,
-      studentName,
-      subject,
+      studentName: sanitizeString(studentName, 80),
+      subject: sanitizeString(subject, 80),
       reason: moderation.reason,
       timestamp: Date.now(),
     });
@@ -234,16 +334,43 @@ async function startServer() {
     });
   });
 
-  // POST /api/moderate/letter - Server-side profanity detection & moderation for letters
+  // POST /api/moderate/letter - Server-side profanity & XSS detection for letters
   app.post('/api/moderate/letter', (req: Request, res: Response) => {
-    const { studentName, grade, title, body, recipientTeacherName } = req.body;
-    const moderation = evaluateProfanity({ studentName, grade, title, body, subject: recipientTeacherName });
+    if (isRateLimitedIp(req, 12, 10000)) {
+      return res.status(429).json({
+        success: false,
+        status: 'blocked',
+        error: 'Too many requests. Please wait a few seconds before submitting again.',
+      });
+    }
+
+    const { studentName, grade, title, body, recipientTeacherName } = req.body || {};
+    if (
+      containsMaliciousScript(studentName) ||
+      containsMaliciousScript(title) ||
+      containsMaliciousScript(body) ||
+      containsMaliciousScript(recipientTeacherName)
+    ) {
+      return res.status(400).json({
+        success: false,
+        status: 'blocked',
+        error: 'Security alert: HTML scripts or unsafe tags are not permitted.',
+      });
+    }
+
+    const moderation = evaluateProfanity({
+      studentName: sanitizeString(studentName, 100),
+      grade: sanitizeString(grade, 80),
+      title: sanitizeString(title, 200),
+      body: sanitizeString(body, 4800),
+      subject: sanitizeString(recipientTeacherName, 100),
+    });
 
     if (!moderation.allowed) {
       broadcastRealtime({
         type: 'SUBMISSION_BLOCKED',
         target: 'letter',
-        studentName: studentName || 'Student',
+        studentName: sanitizeString(studentName, 80) || 'Student',
         reason: moderation.reason,
         timestamp: Date.now(),
       });
@@ -262,8 +389,8 @@ async function startServer() {
     broadcastRealtime({
       type: letterStatus === 'flagged' ? 'LETTER_FLAGGED' : 'LETTER_APPROVED',
       status: letterStatus,
-      studentName,
-      title,
+      studentName: sanitizeString(studentName, 80),
+      title: sanitizeString(title, 150),
       timestamp: Date.now(),
     });
 
@@ -275,10 +402,65 @@ async function startServer() {
     });
   });
 
-  // POST /api/realtime/broadcast - General event relay
+  // POST /api/moderate/comment - Server-side security & profanity check for Announcement Comments
+  app.post('/api/moderate/comment', (req: Request, res: Response) => {
+    if (isRateLimitedIp(req, 15, 10000)) {
+      return res.status(429).json({
+        success: false,
+        status: 'blocked',
+        error: 'Rate limit reached: Please wait a moment before posting another comment.',
+      });
+    }
+
+    const { authorName, message } = req.body || {};
+    if (containsMaliciousScript(authorName) || containsMaliciousScript(message)) {
+      return res.status(400).json({
+        success: false,
+        status: 'blocked',
+        error: 'Security alert: Script tags or unsafe HTML are blocked.',
+      });
+    }
+
+    const cleanAuthor = sanitizeString(authorName, 80);
+    const cleanMessage = sanitizeString(message, 500);
+
+    if (!cleanAuthor || !cleanMessage) {
+      return res.status(400).json({
+        success: false,
+        status: 'blocked',
+        error: 'Please enter both your name and a celebration comment.',
+      });
+    }
+
+    const moderation = evaluateProfanity({
+      studentName: cleanAuthor,
+      message: cleanMessage,
+    });
+
+    if (!moderation.allowed || moderation.status === 'flagged') {
+      return res.status(400).json({
+        success: false,
+        status: 'blocked',
+        error: 'Comment blocked: Please keep announcement comments respectful and celebratory.',
+        details: moderation.reason,
+      });
+    }
+
+    return res.json({
+      success: true,
+      status: 'approved',
+      sanitizedAuthor: cleanAuthor,
+      sanitizedMessage: cleanMessage,
+    });
+  });
+
+  // POST /api/realtime/broadcast - Protected event relay
   app.post('/api/realtime/broadcast', (req: Request, res: Response) => {
+    if (isRateLimitedIp(req, 30, 10000)) {
+      return res.status(429).json({ success: false, error: 'Rate limit exceeded' });
+    }
     const event = req.body;
-    if (event && event.type) {
+    if (event && typeof event.type === 'string' && ALLOWED_REALTIME_EVENTS.has(event.type)) {
       broadcastRealtime(event);
     }
     return res.json({ success: true });
@@ -286,7 +468,12 @@ async function startServer() {
 
   // Health check
   app.get('/api/health', (_req: Request, res: Response) => {
-    return res.json({ status: 'ok', onlineCount: getOnlineCount(), timestamp: Date.now() });
+    return res.json({
+      status: 'ok',
+      security: 'active',
+      onlineCount: getOnlineCount(),
+      timestamp: Date.now(),
+    });
   });
 
   // Vite Integration:

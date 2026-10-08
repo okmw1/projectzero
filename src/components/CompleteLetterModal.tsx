@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StudentLetter, UserSession } from '../types';
+import { StudentLetter, UserSession, TributeComment, UserRole } from '../types';
 import {
   X,
   Printer,
@@ -7,11 +7,21 @@ import {
   Trash2,
   Send,
   Sparkles,
-  Paperclip,
   CheckCircle2,
-  ZoomIn,
+  MessageCircle,
+  Lightbulb,
+  AlertTriangle,
 } from 'lucide-react';
 import { playChime } from '../utils/audio';
+
+const LETTER_COMMENT_SUGGESTIONS = [
+  "So touching! Happy Teacher's Day po! 💐",
+  "Thank you for everything, Ma'am/Sir! ✨",
+  'Best teacher ever! We appreciate you so much! 🙌',
+  'Such a heartfelt letter! God bless our teachers! ❤️',
+  'Thank you for your endless patience and guidance! 🌟',
+  'We are so lucky to be in your class! 📚',
+];
 
 interface CompleteLetterModalProps {
   isOpen: boolean;
@@ -22,6 +32,14 @@ interface CompleteLetterModalProps {
   onToggleBookmark?: (letterId: string, currentBookmark: boolean) => void;
   onMarkAsRead?: (letterId: string) => void;
   onDeleteLetter?: (letterId: string) => void;
+  tributeComments?: TributeComment[];
+  onAddTributeComment?: (
+    targetId: string,
+    targetType: 'note' | 'letter',
+    authorName: string,
+    message: string
+  ) => Promise<{ ok: boolean; error?: string }> | void;
+  onDeleteTributeComment?: (commentId: string) => void;
 }
 
 export const CompleteLetterModal: React.FC<CompleteLetterModalProps> = ({
@@ -33,11 +51,21 @@ export const CompleteLetterModal: React.FC<CompleteLetterModalProps> = ({
   onToggleBookmark,
   onMarkAsRead,
   onDeleteLetter,
+  tributeComments = [],
+  onAddTributeComment,
+  onDeleteTributeComment,
 }) => {
   const [isReplying, setIsReplying] = useState(false);
   const [replyText, setReplyText] = useState('');
-  const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [commentAuthor, setCommentAuthor] = useState(user?.name || '');
+  const [commentText, setCommentText] = useState('');
+  const [commentError, setCommentError] = useState('');
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+
+  React.useEffect(() => {
+    if (user?.name) setCommentAuthor(user.name);
+  }, [user?.name]);
 
   React.useEffect(() => {
     if (letter && !letter.isRead && onMarkAsRead) {
@@ -100,12 +128,6 @@ export const CompleteLetterModal: React.FC<CompleteLetterModalProps> = ({
             ) : (
               <span className="px-2 py-0.5 rounded-full bg-[#CE5A46] text-white text-[10px] font-bold">
                 New Letter
-              </span>
-            )}
-            {letter.attachedPhoto && (
-              <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold flex items-center gap-1">
-                <Paperclip className="w-3 h-3 text-blue-600" />
-                <span>Keepsake Photo</span>
               </span>
             )}
             {letter.teacherReplyMessage && (
@@ -194,36 +216,6 @@ export const CompleteLetterModal: React.FC<CompleteLetterModalProps> = ({
               {letter.body}
             </p>
           </div>
-
-          {/* Attached Keepsake Photo if student uploaded one */}
-          {letter.attachedPhoto && (
-            <div className="bg-[#FAF6EE] border border-[#DECDB8] rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5 text-xs font-bold text-[#1F453B]">
-                  <Paperclip className="w-4 h-4 text-[#1F453B]" />
-                  <span>Student Keepsake Attached Photo</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsPhotoZoomed(!isPhotoZoomed)}
-                  className="px-2.5 py-1 rounded-lg bg-white border border-[#DDD0BF] text-[11px] font-bold text-[#55493D] hover:bg-[#F2ECE1] transition-colors cursor-pointer flex items-center gap-1"
-                >
-                  <ZoomIn className="w-3 h-3" />
-                  <span>{isPhotoZoomed ? 'Standard View' : 'Zoom In'}</span>
-                </button>
-              </div>
-
-              <div className="rounded-xl overflow-hidden border border-[#D5C2A8] bg-black/5 p-2 flex justify-center">
-                <img
-                  src={letter.attachedPhoto}
-                  alt="Student attached keepsake"
-                  className={`w-auto object-contain rounded-lg transition-all duration-300 shadow-sm ${
-                    isPhotoZoomed ? 'max-h-[500px]' : 'max-h-64'
-                  }`}
-                />
-              </div>
-            </div>
-          )}
 
           {/* Teacher's Reply Thread if exists */}
           {letter.teacherReplyMessage && (
@@ -322,6 +314,192 @@ export const CompleteLetterModal: React.FC<CompleteLetterModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Community Comments & Appreciation Wishes on this Formal Letter */}
+          {(() => {
+            const letterComments = tributeComments.filter(
+              (c) => c.targetId === letter.id && c.targetType === 'letter'
+            );
+
+            const renderRoleBadge = (role: UserRole) => {
+              if (role === 'admin')
+                return (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-bold uppercase">
+                    ★ Admin
+                  </span>
+                );
+              if (role === 'moderator')
+                return (
+                  <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 text-[9px] font-bold uppercase">
+                    🛡️ Moderator
+                  </span>
+                );
+              if (role === 'teacher')
+                return (
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] font-bold uppercase">
+                    🧑‍🏫 Teacher
+                  </span>
+                );
+              return (
+                <span className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-700 border border-stone-200 text-[9px] font-semibold">
+                  🎓 Student
+                </span>
+              );
+            };
+
+            const handlePostLetterComment = async (e: React.FormEvent) => {
+              e.preventDefault();
+              setCommentError('');
+              const finalAuthor = (user?.name || commentAuthor || '').trim();
+              const finalMsg = commentText.trim();
+              if (!finalAuthor || finalAuthor.length < 2) {
+                setCommentError('Please enter your name or nickname (at least 2 characters).');
+                return;
+              }
+              if (!finalMsg || finalMsg.length < 2) {
+                setCommentError('Please write or select a comment suggestion before posting.');
+                return;
+              }
+              if (!onAddTributeComment) return;
+              setIsSubmittingComment(true);
+              try {
+                const res = await onAddTributeComment(letter.id, 'letter', finalAuthor, finalMsg);
+                if (res && !res.ok) {
+                  setCommentError(res.error || 'Unable to post comment due to safety filter.');
+                } else {
+                  setCommentText('');
+                  playChime();
+                }
+              } finally {
+                setIsSubmittingComment(false);
+              }
+            };
+
+            return (
+              <div className="bg-[#FAF6EE] border border-[#E2D5C3] rounded-2xl p-4 sm:p-5 space-y-3.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#1F453B]">
+                    <MessageCircle className="w-4 h-4 text-[#CE5A46]" />
+                    <span>Community Comments & Wishes ({letterComments.length})</span>
+                  </div>
+                  <span className="text-[10px] font-medium text-[#7A6C5D]">
+                    Students, Teachers & Admins can leave supportive comments
+                  </span>
+                </div>
+
+                {/* Existing Comments List */}
+                {letterComments.length > 0 ? (
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {letterComments.map((c) => (
+                      <div
+                        key={c.id}
+                        className="bg-white border border-[#E8DCC8] rounded-xl p-3 text-xs flex items-start justify-between gap-2 shadow-2xs"
+                      >
+                        <div className="space-y-1 flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-[#231F1D]">{c.authorName}</span>
+                            {renderRoleBadge(c.authorRole)}
+                            <span className="text-[10px] text-[#8C7D6F] font-mono">
+                              •{' '}
+                              {new Date(c.createdAt).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
+                          <p className="text-[#3E342B] font-body-serif leading-relaxed break-words">
+                            {c.message}
+                          </p>
+                        </div>
+                        {(isAdminOrMod || isTeacher) && onDeleteTributeComment && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteTributeComment(c.id)}
+                            className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors cursor-pointer shrink-0"
+                            title="Delete comment"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-[#7A6C5D] italic bg-white/70 p-3 rounded-xl border border-[#E8DCC8]">
+                    No community comments yet — be the first to leave an encouraging message on this letter!
+                  </p>
+                )}
+
+                {/* One-Click Suggestion Chips for Letter Comments */}
+                {onAddTributeComment && (
+                  <form onSubmit={handlePostLetterComment} className="space-y-2.5 pt-2 border-t border-[#E5D7C3]">
+                    <div>
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-[#8C5D39] mb-1.5">
+                        <Lightbulb className="w-3.5 h-3.5 text-[#E7C14A]" />
+                        <span>One-Click Comment Suggestions (tap to fill):</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {LETTER_COMMENT_SUGGESTIONS.map((chip, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              setCommentText(chip);
+                              setCommentError('');
+                              playChime();
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-white hover:bg-[#F3EADB] border border-[#DDD0BF] text-[11px] text-[#3E342B] font-medium transition-all cursor-pointer"
+                          >
+                            {chip}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {commentError && (
+                      <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{commentError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      {!user?.name && (
+                        <input
+                          type="text"
+                          value={commentAuthor}
+                          onChange={(e) => setCommentAuthor(e.target.value)}
+                          placeholder="Your name / nickname *"
+                          maxLength={50}
+                          className="sm:w-44 px-3 py-2 text-xs bg-white border border-[#DDD0BF] rounded-xl text-[#231F1D] focus:outline-none focus:ring-2 focus:ring-[#1F453B]/30"
+                        />
+                      )}
+                      <input
+                        type="text"
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        placeholder={
+                          user?.name
+                            ? `Comment as ${user.name}...`
+                            : 'Write a supportive comment on this letter...'
+                        }
+                        maxLength={350}
+                        className="flex-1 px-3 py-2 text-xs bg-white border border-[#DDD0BF] rounded-xl text-[#231F1D] focus:outline-none focus:ring-2 focus:ring-[#1F453B]/30"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSubmittingComment}
+                        className="px-4 py-2 rounded-xl bg-[#1F453B] hover:bg-[#16332C] text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all disabled:opacity-50 shrink-0"
+                      >
+                        <Send className="w-3 h-3 text-[#F7DE85]" />
+                        <span>{isSubmittingComment ? 'Posting...' : 'Post Comment'}</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Modal Bottom Actions Footer */}

@@ -1,6 +1,6 @@
 {
-  "summary":  "Architecture plan to resolve empty teacher mailbox counts, enable universal full letter reading across Gratitude Wall cards and teacher dashboards, and scale the database to 10,000-15,000 student notes with server-side pagination, indexing, and virtualized wall rendering.",
-  "updatedAt":  "2026-10-03T09:29:40.337820784Z",
+  "summary":  "Revised implementation plan to hide the YouTube/embedded video box (audio-only background playback), restrict all playback/track/queue controls exclusively to Admins and Moderators (synced live via Firestore & WebSockets), and give public visitors only local Volume and Mute controls.",
+  "updatedAt":  "2026-10-06T10:56:16.399345142Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

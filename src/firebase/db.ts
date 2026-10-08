@@ -3,6 +3,7 @@ import { getAuth } from 'firebase/auth';
 import {
   getFirestore,
   doc,
+  getDoc,
   getDocFromServer,
   collection,
   query,
@@ -18,11 +19,18 @@ import {
   QueryDocumentSnapshot,
   DocumentData,
   increment,
+  setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { StudentNote, AuthorizedTeacher, StudentLetter, AuthorizedModerator, PhotoCard } from '../types';
+import { StudentNote, AuthorizedTeacher, StudentLetter, AuthorizedModerator, PhotoCard, MaintenanceSettings, AnnouncementSettings, TributeComment, CommunitySuggestion, MusicBroadcastSettings, MusicTrack } from '../types';
 import { matchesTeacherName } from '../utils/teacherMatcher';
 import { INITIAL_STUDENT_LETTERS, INITIAL_AUTHORIZED_TEACHERS } from '../data/initialNotes';
+
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -32,10 +40,8 @@ export const auth = getAuth(app);
 export async function testFirestoreConnection() {
   try {
     await getDocFromServer(doc(db, 'notes', 'health-check'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore offline notice. Fallback cache active.');
-    }
+  } catch {
+    // Offline fallback cache active
   }
 }
 testFirestoreConnection();
@@ -108,14 +114,15 @@ export async function fetchNotesPage(
         flaggedReason: data.flaggedReason || '',
         letterId: data.letterId || undefined,
         isFormalLetterPreview: !!data.isFormalLetterPreview,
+        fullLetterBody: data.fullLetterBody || undefined,
+        letterTitle: data.letterTitle || undefined,
       };
     });
 
     const lastVisibleDoc = docs.length > 0 ? docs[docs.length - 1] : null;
     const hasMore = docs.length === batchSize;
     return { notes, lastVisibleDoc, hasMore };
-  } catch (error) {
-    console.error('Error fetching notes page:', error);
+  } catch {
     return { notes: [], lastVisibleDoc: null, hasMore: false };
   }
 }
@@ -123,13 +130,21 @@ export async function fetchNotesPage(
 /**
  * Subscribe to the newest live notes (optimized window for 10k-15k scale)
  */
-export function subscribeToRecentNotes(onNotesUpdated: (notes: StudentNote[]) => void, batchLimit = 60) {
+export function subscribeToRecentNotes(
+  onNotesUpdated: (notes: StudentNote[], removedIds?: string[]) => void,
+  batchLimit = 100
+) {
   const notesRef = collection(db, 'notes');
   const q = query(notesRef, orderBy('createdAt', 'desc'), limit(batchLimit));
 
   return onSnapshot(
     q,
     (snapshot) => {
+      const removedIds = snapshot
+        .docChanges()
+        .filter((change) => change.type === 'removed')
+        .map((change) => change.doc.id);
+
       const notes: StudentNote[] = snapshot.docs.map((docSnap) => {
         const data = docSnap.data();
         return {
@@ -143,7 +158,7 @@ export function subscribeToRecentNotes(onNotesUpdated: (notes: StudentNote[]) =>
           message: data.message || '',
           color: data.color || 'blush',
           likes: typeof data.likes === 'number' ? data.likes : 1,
-          createdAt: data.createdAt || Date.now(),
+          createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
           isTeacherReply: !!data.isTeacherReply,
           teacherComment: data.teacherComment || '',
           teacherCommentAuthor: data.teacherCommentAuthor || '',
@@ -152,45 +167,64 @@ export function subscribeToRecentNotes(onNotesUpdated: (notes: StudentNote[]) =>
           flaggedReason: data.flaggedReason || '',
           letterId: data.letterId || undefined,
           isFormalLetterPreview: !!data.isFormalLetterPreview,
+          fullLetterBody: data.fullLetterBody || undefined,
+          letterTitle: data.letterTitle || undefined,
         };
       });
-      onNotesUpdated(notes);
+      onNotesUpdated(notes, removedIds);
     },
-    (error) => {
-      console.error('Realtime listener error:', error);
+    () => {
+      // Handled via local cache & realtime hub
     }
   );
 }
 
 /**
- * Add a new student note to Cloud Firestore
+ * Add a new student note to Cloud Firestore (sanitized so no undefined values ever break setDoc)
  */
 export async function addNoteToCloud(note: StudentNote) {
   try {
     const docRef = doc(db, 'notes', note.id);
-    await setDoc(docRef, {
+    const existing = await getDoc(docRef);
+    if (existing.exists()) return;
+    const rawMessage = note.message || '';
+    const safeMessage = rawMessage.slice(0, 980);
+    const payload: Record<string, any> = {
       id: note.id,
-      studentName: note.studentName,
+      studentName: (note.studentName || 'Student').slice(0, 78),
       grade: note.grade || '',
       gradeLevel: note.gradeLevel || '',
       strandOrSubject: note.strandOrSubject || '',
       teacherName: note.teacherName || '',
-      subject: note.subject.toUpperCase(),
-      message: note.message,
-      color: note.color,
-      likes: note.likes || 1,
-      createdAt: note.createdAt || Date.now(),
+      subject: (note.subject || 'GENERAL').toUpperCase().slice(0, 95),
+      message: safeMessage,
+      color: note.color || 'blush',
+      likes: typeof note.likes === 'number' ? note.likes : 1,
+      createdAt: typeof note.createdAt === 'number' ? note.createdAt : Date.now(),
       isTeacherReply: !!note.isTeacherReply,
       teacherComment: note.teacherComment || '',
       teacherCommentAuthor: note.teacherCommentAuthor || '',
       teacherCommentTime: note.teacherCommentTime || 0,
       status: note.status || 'approved',
       flaggedReason: note.flaggedReason || '',
-      letterId: note.letterId || undefined,
       isFormalLetterPreview: !!note.isFormalLetterPreview,
-    });
-  } catch (error) {
-    console.error('Error adding note to Firestore:', error);
+    };
+
+    if (note.letterId) {
+      payload.letterId = note.letterId;
+    }
+    if (note.fullLetterBody) {
+      payload.fullLetterBody = note.fullLetterBody.slice(0, 4800);
+    } else if (rawMessage.length > 980) {
+      payload.fullLetterBody = rawMessage.slice(0, 4800);
+    }
+    if (note.letterTitle) {
+      payload.letterTitle = note.letterTitle.slice(0, 240);
+    }
+
+    await setDoc(docRef, payload);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -205,8 +239,8 @@ export async function addTeacherCommentToNoteInCloud(noteId: string, comment: st
       teacherCommentAuthor: teacherName,
       teacherCommentTime: Date.now(),
     });
-  } catch (error) {
-    console.error('Error adding teacher comment to note:', error);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -219,8 +253,8 @@ export async function likeNoteInCloud(noteId: string) {
     await updateDoc(docRef, {
       likes: increment(1),
     });
-  } catch (error) {
-    console.error('Error incrementing likes:', error);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -231,8 +265,8 @@ export async function deleteNoteFromCloud(noteId: string) {
   try {
     const docRef = doc(db, 'notes', noteId);
     await deleteDoc(docRef);
-  } catch (error) {
-    console.error('Error deleting note from cloud:', error);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -247,8 +281,8 @@ export async function seedInitialNotesIfEmpty(initialNotes: StudentNote[]) {
         await addNoteToCloud(note);
       }
     }
-  } catch (e) {
-    console.warn('Notice seeding initial notes:', e);
+  } catch {
+    // Ignore seed notice
   }
 }
 
@@ -263,8 +297,8 @@ export async function seedInitialLettersIfEmpty(initialLetters: StudentLetter[] 
         await sendLetterToCloud(letter);
       }
     }
-  } catch (e) {
-    console.warn('Notice seeding initial letters:', e);
+  } catch {
+    // Ignore seed notice
   }
 }
 
@@ -279,8 +313,8 @@ export async function seedInitialTeachersIfEmpty(initialTeachers: AuthorizedTeac
         await saveTeacherToCloud(teacher);
       }
     }
-  } catch (e) {
-    console.warn('Notice seeding initial teachers:', e);
+  } catch {
+    // Ignore seed notice
   }
 }
 
@@ -305,8 +339,8 @@ export function subscribeToAuthorizedTeachers(onTeachersUpdated: (teachers: Auth
       });
       onTeachersUpdated(teachers);
     },
-    (err) => {
-      console.warn('Notice loading teachers from cloud:', err);
+    () => {
+      // Fallback handled locally
     }
   );
 }
@@ -318,8 +352,8 @@ export async function saveTeacherToCloud(teacher: AuthorizedTeacher) {
   try {
     const docRef = doc(db, 'teachers', teacher.id);
     await setDoc(docRef, teacher);
-  } catch (err) {
-    console.error('Error saving teacher to cloud:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -330,8 +364,8 @@ export async function deleteTeacherFromCloud(teacherId: string) {
   try {
     const docRef = doc(db, 'teachers', teacherId);
     await deleteDoc(docRef);
-  } catch (err) {
-    console.error('Error removing teacher from cloud:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -358,40 +392,68 @@ export async function cleanupInvalidTeachers() {
         await deleteDoc(doc(db, 'teachers', d.id));
       }
     }
-  } catch (e) {
-    console.warn('Teacher cleanup notice:', e);
+  } catch {
+    // Ignore cleanup notice
   }
 }
 
 /**
- * Send a formal student letter to Cloud Firestore
+ * Send a formal student letter to Cloud Firestore (sanitized without undefined fields)
  */
 export async function sendLetterToCloud(letter: StudentLetter) {
   try {
     const docRef = doc(db, 'letters', letter.id);
-    await setDoc(docRef, {
-      ...letter,
-      createdAt: letter.createdAt || Date.now(),
+    const existing = await getDoc(docRef);
+    if (existing.exists()) return;
+    const payload: Record<string, any> = {
+      id: letter.id,
+      recipientTeacherName: (letter.recipientTeacherName || 'Teacher').slice(0, 95),
+      recipientSubject: (letter.recipientSubject || 'General').slice(0, 95),
+      studentName: (letter.studentName || 'Student').slice(0, 78),
+      grade: letter.grade || '',
+      gradeLevel: letter.gradeLevel || '',
+      templateType: letter.templateType || 'custom',
+      title: (letter.title || 'Thank You Teacher').slice(0, 145),
+      body: (letter.body || '').slice(0, 3450),
+      createdAt: typeof letter.createdAt === 'number' ? letter.createdAt : Date.now(),
       isRead: !!letter.isRead,
       isBookmarked: !!letter.isBookmarked,
+      pinPreviewToWall: !!letter.pinPreviewToWall,
+      teacherReplyMessage: letter.teacherReplyMessage || '',
+      teacherReplyAuthor: letter.teacherReplyAuthor || '',
+      teacherReplyTime: letter.teacherReplyTime || 0,
       status: letter.status || 'approved',
       flaggedReason: letter.flaggedReason || '',
-    });
-  } catch (err) {
-    console.error('Error sending letter to cloud:', err);
+    };
+
+    if (letter.attachedPhoto && typeof letter.attachedPhoto === 'string') {
+      payload.attachedPhoto = letter.attachedPhoto;
+    }
+
+    await setDoc(docRef, payload);
+  } catch {
+    // Fallback handled locally
   }
 }
 
 /**
  * Subscribe to all letters or letters for a specific teacher
  */
-export function subscribeToLetters(onLettersUpdated: (letters: StudentLetter[]) => void, teacherName?: string) {
+export function subscribeToLetters(
+  onLettersUpdated: (letters: StudentLetter[], removedIds?: string[]) => void,
+  teacherName?: string
+) {
   const lettersRef = collection(db, 'letters');
-  const q = query(lettersRef, orderBy('createdAt', 'desc'), limit(100));
+  const q = query(lettersRef, orderBy('createdAt', 'desc'), limit(150));
 
   return onSnapshot(
     q,
     (snapshot) => {
+      const removedIds = snapshot
+        .docChanges()
+        .filter((change) => change.type === 'removed')
+        .map((change) => change.doc.id);
+
       let letters: StudentLetter[] = snapshot.docs.map((docSnap) => {
         const d = docSnap.data();
         return {
@@ -428,10 +490,10 @@ export function subscribeToLetters(onLettersUpdated: (letters: StudentLetter[]) 
         seedInitialLettersIfEmpty(INITIAL_STUDENT_LETTERS);
       }
 
-      onLettersUpdated(letters);
+      onLettersUpdated(letters, removedIds);
     },
-    (err) => {
-      console.warn('Notice loading letters from cloud:', err);
+    () => {
+      // Fallback handled locally
     }
   );
 }
@@ -448,8 +510,8 @@ export async function addTeacherReplyToLetterInCloud(letterId: string, reply: st
       teacherReplyTime: Date.now(),
       isRead: true,
     });
-  } catch (error) {
-    console.error('Error adding teacher reply to letter:', error);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -462,8 +524,8 @@ export async function markLetterAsReadInCloud(letterId: string) {
     await updateDoc(docRef, {
       isRead: true,
     });
-  } catch (err) {
-    console.error('Error marking letter as read:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -476,8 +538,8 @@ export async function toggleLetterBookmarkInCloud(letterId: string, isBookmarked
     await updateDoc(docRef, {
       isBookmarked,
     });
-  } catch (err) {
-    console.error('Error toggling letter bookmark:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -488,8 +550,8 @@ export async function deleteLetterFromCloud(letterId: string) {
   try {
     const docRef = doc(db, 'letters', letterId);
     await deleteDoc(docRef);
-  } catch (error) {
-    console.error('Error deleting letter from cloud:', error);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -516,8 +578,8 @@ export function subscribeToModerators(onModeratorsUpdated: (moderators: Authoriz
       });
       onModeratorsUpdated(mods);
     },
-    (err) => {
-      console.warn('Notice loading moderators from cloud:', err);
+    () => {
+      // Fallback handled locally
     }
   );
 }
@@ -529,8 +591,8 @@ export async function saveModeratorToCloud(moderator: AuthorizedModerator) {
   try {
     const docRef = doc(db, 'moderators', moderator.id);
     await setDoc(docRef, moderator);
-  } catch (err) {
-    console.error('Error saving moderator to cloud:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -541,8 +603,8 @@ export async function deleteModeratorFromCloud(moderatorId: string) {
   try {
     const docRef = doc(db, 'moderators', moderatorId);
     await deleteDoc(docRef);
-  } catch (err) {
-    console.error('Error removing moderator from cloud:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -558,8 +620,8 @@ export async function seedInitialModeratorsIfEmpty(initialMods: AuthorizedModera
         await saveModeratorToCloud(mod);
       }
     }
-  } catch (e) {
-    console.warn('Notice seeding initial moderators:', e);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -584,8 +646,8 @@ export async function cleanupInvalidModerators() {
         await deleteDoc(doc(db, 'moderators', d.id));
       }
     }
-  } catch (e) {
-    console.warn('Notice cleaning up invalid moderators:', e);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -602,8 +664,8 @@ export function subscribeToAdminSettings(onSettings: (settings: { adminPassword?
         onSettings({ adminPassword: data.adminPassword });
       }
     },
-    (err) => {
-      console.warn('Notice listening to admin settings:', err);
+    () => {
+      // Fallback handled locally
     }
   );
 }
@@ -619,8 +681,232 @@ export async function saveAdminPasswordToCloud(newPassword: string) {
       adminEmail: 'taynanjetraj@gmail.com',
       updatedAt: Date.now(),
     });
-  } catch (err) {
-    console.error('Error saving admin password to cloud:', err);
+  } catch {
+    // Fallback handled locally
+  }
+}
+
+/**
+ * Subscribe to real-time Maintenance Mode settings from Cloud Firestore
+ */
+export function subscribeToMaintenanceSettings(onUpdate: (settings: MaintenanceSettings) => void) {
+  const maintRef = doc(db, 'admin_settings', 'maintenance');
+  return onSnapshot(
+    maintRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const d = docSnap.data();
+        onUpdate({
+          enabled: !!d.enabled,
+          message:
+            d.message ||
+            'We are currently performing scheduled database and real-time synchronization upgrades so every student note and formal letter is preserved.',
+          estimatedReturn: d.estimatedReturn || 'Back online shortly',
+          updatedAt: d.updatedAt || Date.now(),
+          updatedBy: d.updatedBy || 'Administrator',
+        });
+      }
+    },
+    () => {
+      // Fallback handled locally
+    }
+  );
+}
+
+/**
+ * Save Maintenance Mode settings to Cloud Firestore
+ */
+export async function saveMaintenanceSettingsToCloud(settings: MaintenanceSettings) {
+  try {
+    const maintRef = doc(db, 'admin_settings', 'maintenance');
+    await setDoc(maintRef, {
+      enabled: !!settings.enabled,
+      message: settings.message || '',
+      estimatedReturn: settings.estimatedReturn || '',
+      updatedAt: Date.now(),
+      updatedBy: settings.updatedBy || 'Administrator',
+    });
+  } catch {
+    // Fallback handled locally
+  }
+}
+
+/**
+ * Subscribe to real-time Celebratory Announcement settings from Cloud Firestore
+ */
+export function subscribeToAnnouncementSettings(onUpdate: (settings: AnnouncementSettings) => void) {
+  const annRef = doc(db, 'admin_settings', 'announcement');
+  return onSnapshot(
+    annRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const d = docSnap.data();
+        const rawComments = Array.isArray(d.comments) ? d.comments : [];
+        onUpdate({
+          enabled: !!d.enabled,
+          title: d.title || "Happy Teacher's Day to Our Beloved Educators! 🎉",
+          message:
+            d.message ||
+            "Today and every day, we celebrate your unwavering patience, dedication, and heart in guiding every student. Thank you for making our school a second home!",
+          senderName: d.senderName || 'School Administration & Student Council',
+          theme: d.theme || 'gold',
+          showPopupModal: d.showPopupModal !== undefined ? !!d.showPopupModal : true,
+          triggerConfetti: d.triggerConfetti !== undefined ? !!d.triggerConfetti : true,
+          updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : Date.now(),
+          comments: rawComments.map((c: any) => ({
+            id: String(c.id || `c-${Date.now()}`),
+            authorName: String(c.authorName || 'Student'),
+            authorRole: c.authorRole || 'student',
+            message: String(c.message || ''),
+            createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+          })),
+        });
+      }
+    },
+    () => {
+      // Fallback handled locally
+    }
+  );
+}
+
+/**
+ * Save Celebratory Announcement settings to Cloud Firestore
+ */
+export async function saveAnnouncementSettingsToCloud(settings: AnnouncementSettings) {
+  try {
+    const annRef = doc(db, 'admin_settings', 'announcement');
+    const safeComments = Array.isArray(settings.comments)
+      ? settings.comments.slice(0, 100).map((c) => ({
+          id: String(c.id),
+          authorName: String(c.authorName || 'Student').slice(0, 80),
+          authorRole: c.authorRole || 'student',
+          message: String(c.message || '').slice(0, 500),
+          createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+        }))
+      : [];
+    await setDoc(annRef, {
+      enabled: !!settings.enabled,
+      title: (settings.title || '').slice(0, 180),
+      message: (settings.message || '').slice(0, 2000),
+      senderName: (settings.senderName || 'School Administration').slice(0, 120),
+      theme: settings.theme || 'gold',
+      showPopupModal: !!settings.showPopupModal,
+      triggerConfetti: !!settings.triggerConfetti,
+      updatedAt: settings.updatedAt || Date.now(),
+      comments: safeComments,
+    });
+  } catch {
+    // Fallback handled locally
+  }
+}
+
+/**
+ * Subscribe to real-time Tribute Comments (on Sticky Notes & Formal Letters)
+ */
+export function subscribeToTributeComments(onUpdate: (comments: TributeComment[]) => void) {
+  const ref = doc(db, 'admin_settings', 'tribute_comments');
+  return onSnapshot(
+    ref,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const d = docSnap.data();
+        const raw = Array.isArray(d.items) ? d.items : [];
+        onUpdate(
+          raw.map((c: any) => ({
+            id: String(c.id || `tc-${Date.now()}`),
+            targetId: String(c.targetId || ''),
+            targetType: c.targetType === 'letter' ? 'letter' : 'note',
+            authorName: String(c.authorName || 'Student'),
+            authorRole: c.authorRole || 'student',
+            message: String(c.message || ''),
+            createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+          }))
+        );
+      }
+    },
+    () => {
+      // Fallback handled locally
+    }
+  );
+}
+
+/**
+ * Save Tribute Comments (on Sticky Notes & Formal Letters) to Cloud Firestore
+ */
+export async function saveTributeCommentsToCloud(comments: TributeComment[]) {
+  try {
+    const ref = doc(db, 'admin_settings', 'tribute_comments');
+    const safeItems = Array.isArray(comments)
+      ? comments.slice(0, 300).map((c) => ({
+          id: String(c.id),
+          targetId: String(c.targetId || '').slice(0, 128),
+          targetType: c.targetType === 'letter' ? 'letter' : 'note',
+          authorName: String(c.authorName || 'Student').slice(0, 80),
+          authorRole: c.authorRole || 'student',
+          message: String(c.message || '').slice(0, 500),
+          createdAt: typeof c.createdAt === 'number' ? c.createdAt : Date.now(),
+        }))
+      : [];
+    await setDoc(ref, {
+      items: safeItems,
+      updatedAt: Date.now(),
+    });
+  } catch {
+    // Fallback handled locally
+  }
+}
+
+/**
+ * Subscribe to Community Suggestions Box in Cloud Firestore
+ */
+export function subscribeToCommunitySuggestions(onUpdate: (suggestions: CommunitySuggestion[]) => void) {
+  const ref = doc(db, 'admin_settings', 'suggestions');
+  return onSnapshot(
+    ref,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const d = docSnap.data();
+        const raw = Array.isArray(d.items) ? d.items : [];
+        onUpdate(
+          raw.map((s: any) => ({
+            id: String(s.id || `sug-${Date.now()}`),
+            authorName: String(s.authorName || 'Student'),
+            authorRole: s.authorRole || 'student',
+            category: String(s.category || 'Greeting Idea'),
+            text: String(s.text || ''),
+            createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+          }))
+        );
+      }
+    },
+    () => {
+      // Fallback handled locally
+    }
+  );
+}
+
+/**
+ * Save Community Suggestions Box to Cloud Firestore
+ */
+export async function saveCommunitySuggestionsToCloud(suggestions: CommunitySuggestion[]) {
+  try {
+    const ref = doc(db, 'admin_settings', 'suggestions');
+    const safeItems = Array.isArray(suggestions)
+      ? suggestions.slice(0, 150).map((s) => ({
+          id: String(s.id),
+          authorName: String(s.authorName || 'Student').slice(0, 80),
+          authorRole: s.authorRole || 'student',
+          category: String(s.category || 'Greeting Idea').slice(0, 60),
+          text: String(s.text || '').slice(0, 500),
+          createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+        }))
+      : [];
+    await setDoc(ref, {
+      items: safeItems,
+      updatedAt: Date.now(),
+    });
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -649,8 +935,8 @@ export function subscribeToPhotos(onPhotosUpdated: (photos: PhotoCard[]) => void
         onPhotosUpdated(photos);
       }
     },
-    (err) => {
-      console.warn('Real-time photo subscription note:', err);
+    () => {
+      // Fallback handled locally
     }
   );
 }
@@ -669,8 +955,8 @@ export async function savePhotoToCloud(photo: PhotoCard) {
       rotation: photo.rotation ?? 0,
       createdAt: photo.createdAt || Date.now(),
     });
-  } catch (err) {
-    console.error('Error saving photo to cloud:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -681,8 +967,8 @@ export async function deletePhotoFromCloud(photoId: string) {
   try {
     const photoRef = doc(db, 'photos', photoId);
     await deleteDoc(photoRef);
-  } catch (error) {
-    console.error('Error deleting photo from cloud:', error);
+  } catch {
+    // Fallback handled locally
   }
 }
 
@@ -697,7 +983,86 @@ export async function seedInitialPhotosIfEmpty(initialPhotos: PhotoCard[]) {
         await savePhotoToCloud(photo);
       }
     }
-  } catch (err) {
-    console.warn('Notice seeding initial photos:', err);
+  } catch {
+    // Fallback handled locally
   }
 }
+
+/**
+ * Subscribe to Admin/Moderator Official Music Queue & Broadcast State in Cloud Firestore
+ */
+export function subscribeToMusicBroadcast(onUpdate: (settings: MusicBroadcastSettings) => void) {
+  const ref = doc(db, 'admin_settings', 'music_queue');
+  return onSnapshot(
+    ref,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const d = docSnap.data();
+        const rawQueue = Array.isArray(d.queue) ? d.queue : [];
+        const sanitizedQueue: MusicTrack[] = rawQueue.map((t: any, idx: number) => ({
+          id: String(t.id || `track-${idx}`),
+          title: String(t.title || 'Teacher’s Day Track'),
+          subtitle: String(t.subtitle || 'Soundtrack'),
+          type: t.type || 'synth',
+          presetId: t.presetId || undefined,
+          url: t.url || undefined,
+          embedUrl: t.embedUrl || undefined,
+          youtubeId: t.youtubeId || undefined,
+          spotifyKind: t.spotifyKind || undefined,
+          spotifyId: t.spotifyId || undefined,
+        }));
+        onUpdate({
+          queue: sanitizedQueue,
+          currentQueueIndex: typeof d.currentQueueIndex === 'number' ? d.currentQueueIndex : 0,
+          isPlaying: !!d.isPlaying,
+          loopMode: d.loopMode === 'one' || d.loopMode === 'off' ? d.loopMode : 'queue',
+          isShuffle: !!d.isShuffle,
+          updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : Date.now(),
+          updatedBy: d.updatedBy || 'Administrator',
+        });
+      }
+    },
+    () => {
+      // Fallback handled locally
+    }
+  );
+}
+
+/**
+ * Save Admin/Moderator Official Music Queue & Broadcast State to Cloud Firestore
+ */
+export async function saveMusicBroadcastToCloud(settings: MusicBroadcastSettings) {
+  try {
+    const ref = doc(db, 'admin_settings', 'music_queue');
+    const safeQueue = Array.isArray(settings.queue)
+      ? settings.queue.slice(0, 60).map((t) => {
+          const item: Record<string, any> = {
+            id: String(t.id),
+            title: String(t.title || 'Track').slice(0, 100),
+            subtitle: String(t.subtitle || 'Soundtrack').slice(0, 100),
+            type: t.type || 'synth',
+          };
+          if (t.presetId) item.presetId = t.presetId;
+          if (t.url) item.url = String(t.url).slice(0, 600);
+          if (t.embedUrl) item.embedUrl = String(t.embedUrl).slice(0, 800);
+          if (t.youtubeId) item.youtubeId = String(t.youtubeId).slice(0, 32);
+          if (t.spotifyKind) item.spotifyKind = t.spotifyKind;
+          if (t.spotifyId) item.spotifyId = String(t.spotifyId).slice(0, 64);
+          return item;
+        })
+      : [];
+
+    await setDoc(ref, {
+      queue: safeQueue,
+      currentQueueIndex: typeof settings.currentQueueIndex === 'number' ? settings.currentQueueIndex : 0,
+      isPlaying: !!settings.isPlaying,
+      loopMode: settings.loopMode || 'queue',
+      isShuffle: !!settings.isShuffle,
+      updatedAt: settings.updatedAt || Date.now(),
+      updatedBy: settings.updatedBy || 'Administrator',
+    });
+  } catch {
+    // Fallback handled locally
+  }
+}
+

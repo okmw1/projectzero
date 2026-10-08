@@ -192,6 +192,26 @@ export const INITIAL_PHOTO_CARDS: PhotoCard[] = [
 
 export const INITIAL_STUDENT_NOTES: StudentNote[] = [
   {
+    id: 'note-revived-angelica-b-she',
+    subject: 'FILIPINO',
+    teacherName: 'Angelica B.',
+    studentName: 'she',
+    grade: 'Grade 8 - CORDIALITY',
+    gradeLevel: 'Grade 7-10',
+    strandOrSubject: 'Filipino',
+    message:
+      "💌 To our beloved teacher Angelica B.,\n\nAs Teacher's Day arrives, I wanted to take a moment to write you this letter not just as your student, but as someone whose perspective on life has been profoundly shaped by your presence.\n\nBeyond our daily syllabus, what I cherish most is the wisdom and integrity you brought into our room. You always reminded us that character matters far more than grades, and that how we treat each other in difficult moments is the true measure of our learning.\n\nWhenever I felt uncertain about the path ahead, your quiet encouragement gave me the grounded courage to move forward. Thank you for being more than an instructor—thank you for being a mentor whose lessons will continue to echo long after I graduate.\n\nWith deepest respect and gratitude,\nshe",
+    color: 'lilac',
+    likes: 12,
+    createdAt: new Date(2026, 9, 5, 18, 35).getTime(),
+    status: 'approved',
+    letterId: 'letter-revived-angelica-b-she',
+    isFormalLetterPreview: true,
+    letterTitle: 'A Tribute to Your Guidance Beyond the Classroom',
+    fullLetterBody:
+      "To our beloved teacher Angelica B.,\n\nAs Teacher's Day arrives, I wanted to take a moment to write you this letter not just as your student, but as someone whose perspective on life has been profoundly shaped by your presence.\n\nBeyond our daily syllabus, what I cherish most is the wisdom and integrity you brought into our room. You always reminded us that character matters far more than grades, and that how we treat each other in difficult moments is the true measure of our learning.\n\nWhenever I felt uncertain about the path ahead, your quiet encouragement gave me the grounded courage to move forward. Thank you for being more than an instructor—thank you for being a mentor whose lessons will continue to echo long after I graduate.\n\nWith deepest respect and gratitude,\nshe",
+  },
+  {
     id: 'note-1',
     subject: 'MATHEMATICS',
     teacherName: 'Sir Reyes',
@@ -281,6 +301,22 @@ export const INITIAL_STUDENT_NOTES: StudentNote[] = [
 ];
 
 export const INITIAL_STUDENT_LETTERS: StudentLetter[] = [
+  {
+    id: 'letter-revived-angelica-b-she',
+    recipientTeacherName: 'Angelica B.',
+    recipientSubject: 'Filipino',
+    studentName: 'she',
+    grade: 'Grade 8 - CORDIALITY',
+    gradeLevel: 'Grade 7-10',
+    templateType: 'mentorship',
+    title: 'A Tribute to Your Guidance Beyond the Classroom',
+    body: "To our beloved teacher Angelica B.,\n\nAs Teacher's Day arrives, I wanted to take a moment to write you this letter not just as your student, but as someone whose perspective on life has been profoundly shaped by your presence.\n\nBeyond our daily syllabus, what I cherish most is the wisdom and integrity you brought into our room. You always reminded us that character matters far more than grades, and that how we treat each other in difficult moments is the true measure of our learning.\n\nWhenever I felt uncertain about the path ahead, your quiet encouragement gave me the grounded courage to move forward. Thank you for being more than an instructor—thank you for being a mentor whose lessons will continue to echo long after I graduate.\n\nWith deepest respect and gratitude,\nshe",
+    createdAt: new Date(2026, 9, 5, 18, 35).getTime(),
+    isRead: false,
+    isBookmarked: true,
+    pinPreviewToWall: true,
+    status: 'approved',
+  },
   {
     id: 'letter-init-angelica',
     recipientTeacherName: "Ma'am Angelica",

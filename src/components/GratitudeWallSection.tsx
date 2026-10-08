@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { StudentNote, PhotoCard, UserSession, StudentLetter } from '../types';
+import React, { useState, useRef, useMemo } from 'react';
+import { StudentNote, PhotoCard, UserSession, StudentLetter, TributeComment, UserRole } from '../types';
 import { NOTE_COLOR_MAP } from '../data/initialNotes';
 import { JHS_SUBJECTS, SHS_STRANDS } from '../data/curriculum';
 import {
@@ -18,10 +18,23 @@ import {
   GraduationCap,
   Send,
   BookOpen,
+  Lightbulb,
+  AlertTriangle,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { playChime, playHeartSound } from '../utils/audio';
 import { CompleteLetterModal } from './CompleteLetterModal.tsx';
+import { LETTER_TEMPLATES } from '../data/letterTemplates';
+import { matchesTeacherName } from '../utils/teacherMatcher';
+
+const NOTE_COMMENT_SUGGESTIONS = [
+  "Happy Teacher's Day po! 💐",
+  'So true! Best teacher ever! 🙌',
+  "Thank you for everything, Ma'am/Sir! ✨",
+  'We love your class so much! ❤️',
+  'Thank you for your patience and kindness! 🌟',
+  'Proud to be your student! 🎓',
+];
 
 interface GratitudeWallSectionProps {
   notes: StudentNote[];
@@ -42,6 +55,14 @@ interface GratitudeWallSectionProps {
   onLoadMoreCloudNotes?: () => void;
   hasMoreCloudNotes?: boolean;
   isLoadingMoreCloudNotes?: boolean;
+  tributeComments?: TributeComment[];
+  onAddTributeComment?: (
+    targetId: string,
+    targetType: 'note' | 'letter',
+    authorName: string,
+    message: string
+  ) => Promise<{ ok: boolean; error?: string }> | void;
+  onDeleteTributeComment?: (commentId: string) => void;
 }
 
 export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
@@ -62,9 +83,12 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
   onLoadMoreCloudNotes,
   hasMoreCloudNotes,
   isLoadingMoreCloudNotes,
+  tributeComments = [],
+  onAddTributeComment,
+  onDeleteTributeComment,
 }) => {
   // Multi-tier filtering organized by Grade Level & Curriculum Subjects
-  const [gradeLevelFilter, setGradeLevelFilter] = useState<'all' | 'JHS' | 'SHS' | 'teacher_messages' | 'my_tributes'>('all');
+  const [gradeLevelFilter, setGradeLevelFilter] = useState<'all' | 'JHS' | 'SHS' | 'formal_letters' | 'teacher_messages' | 'my_tributes'>('all');
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
   const [starredNoteId, setStarredNoteId] = useState<string | null>(null);
   const [photos, setPhotos] = useState<PhotoCard[]>(photoCards);
@@ -77,9 +101,16 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
   const [noteToDelete, setNoteToDelete] = useState<StudentNote | null>(null);
   const [deleteToast, setDeleteToast] = useState<string>('');
 
-  // In-app single note comment modal for teacher
+  // In-app multi-user note comment modal
   const [commentingNote, setCommentingNote] = useState<StudentNote | null>(null);
+  const [commentAuthor, setCommentAuthor] = useState<string>(user?.name || '');
   const [commentText, setCommentText] = useState<string>('');
+  const [commentError, setCommentError] = useState<string>('');
+  const [isPostingComment, setIsPostingComment] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    if (user?.name) setCommentAuthor(user.name);
+  }, [user?.name]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -123,32 +154,112 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
     );
   };
 
-  const isJHS = (n: StudentNote) => {
-    if (n.gradeLevel === 'Grade 7-10') return true;
-    const g = (n.grade || '').toLowerCase();
-    if (g.includes('7') || g.includes('8') || g.includes('9') || g.includes('10')) return true;
-    return JHS_SUBJECTS.some((s) => n.subject.toLowerCase().includes(s.name.toLowerCase()));
-  };
-
   const isSHS = (n: StudentNote) => {
+    if (n.isTeacherReply) return false;
     if (n.gradeLevel === 'SHS') return true;
+    if (n.gradeLevel === 'Grade 7-10') return false;
     const g = (n.grade || '').toLowerCase();
-    if (g.includes('11') || g.includes('12') || g.includes('shs')) return true;
-    return SHS_STRANDS.some((s) => n.subject.toLowerCase().includes(s.name.toLowerCase()));
+    if (g.includes('11') || g.includes('12') || g.includes('shs') || g.includes('senior high')) return true;
+    return SHS_STRANDS.some((s) => n.subject.toLowerCase() === s.name.toLowerCase());
   };
 
-  const myDedicatedNotes = notes.filter(isDedicatedToMe);
-  const jhsNotes = notes.filter(isJHS);
-  const shsNotes = notes.filter(isSHS);
-  const teacherRepliesNotes = notes.filter((n) => n.isTeacherReply);
+  const isJHS = (n: StudentNote) => {
+    if (n.isTeacherReply) return false;
+    if (isSHS(n)) return false;
+    return true;
+  };
 
-  // Filter notes
-  const filteredNotes = notes.filter((n) => {
+  // Automatically merge any Formal Student Letter from `letters` that is missing a companion card in `notes`
+  // so no formal letter visible in the Admin Dashboard or Teacher Mailbox is ever invisible on the public Gratitude Wall.
+  const allWallNotes = useMemo(() => {
+    const merged: StudentNote[] = [...notes];
+    const hasMatchingNote = (letter: StudentLetter) =>
+      merged.some(
+        (n) =>
+          n.letterId === letter.id ||
+          n.id === `note-from-${letter.id}` ||
+          n.id === `note-from-letter-${letter.id}` ||
+          (n.studentName.toLowerCase().trim() === letter.studentName.toLowerCase().trim() &&
+            (n.teacherName || '').toLowerCase().trim() === (letter.recipientTeacherName || '').toLowerCase().trim() &&
+            ((n.letterTitle && n.letterTitle.toLowerCase().trim() === letter.title.toLowerCase().trim()) ||
+              n.message.toLowerCase().includes(letter.body.slice(0, 40).toLowerCase().trim())))
+      );
+
+    letters.forEach((letter) => {
+      if (!hasMatchingNote(letter)) {
+        const g = (letter.grade || '').toLowerCase();
+        const inferredLevel: 'Grade 7-10' | 'SHS' =
+          letter.gradeLevel === 'SHS' ||
+          g.includes('11') ||
+          g.includes('12') ||
+          g.includes('shs') ||
+          g.includes('senior high')
+            ? 'SHS'
+            : 'Grade 7-10';
+
+        merged.push({
+          id: letter.id.startsWith('letter-') ? `note-from-${letter.id}` : `note-from-letter-${letter.id}`,
+          studentName: letter.studentName,
+          teacherName: letter.recipientTeacherName,
+          grade: letter.grade || '',
+          gradeLevel: inferredLevel,
+          strandOrSubject: letter.recipientSubject || 'General',
+          subject: (letter.recipientSubject || 'GENERAL').toUpperCase(),
+          message: `💌 ${letter.body}`,
+          color: 'lilac',
+          likes: 1,
+          createdAt: typeof letter.createdAt === 'number' ? letter.createdAt : Date.now(),
+          status: letter.status || 'approved',
+          flaggedReason: letter.flaggedReason || '',
+          letterId: letter.id,
+          isFormalLetterPreview: true,
+          fullLetterBody: letter.body,
+          letterTitle: letter.title,
+          teacherComment: letter.teacherReplyMessage || '',
+          teacherCommentAuthor: letter.teacherReplyAuthor || '',
+          teacherCommentTime: letter.teacherReplyTime || 0,
+        });
+      }
+    });
+
+    const getTime = (val?: number | string) =>
+      typeof val === 'number' ? val : val ? new Date(val).getTime() : 0;
+
+    return merged.sort((a, b) => getTime(b.createdAt) - getTime(a.createdAt));
+  }, [notes, letters]);
+
+  const myDedicatedNotes = allWallNotes.filter(isDedicatedToMe);
+  const jhsNotes = allWallNotes.filter(isJHS);
+  const shsNotes = allWallNotes.filter(isSHS);
+  const teacherRepliesNotes = allWallNotes.filter((n) => n.isTeacherReply);
+  const wallLetterNotes = allWallNotes.filter(
+    (n) => n.letterId || n.isFormalLetterPreview || n.message.includes('💌')
+  );
+  const totalFormalLettersCount = useMemo(() => {
+    const uniqueKeys = new Set<string>();
+    letters.forEach((l) => uniqueKeys.add(l.id));
+    wallLetterNotes.forEach((n) => uniqueKeys.add(n.letterId || n.id));
+    return uniqueKeys.size;
+  }, [letters, wallLetterNotes]);
+
+  // Filter notes (including revived formal letters)
+  const filteredNotes = allWallNotes.filter((n) => {
     if (gradeLevelFilter === 'my_tributes') {
       return isDedicatedToMe(n);
     }
     if (gradeLevelFilter === 'teacher_messages') {
       return !!n.isTeacherReply;
+    }
+    if (gradeLevelFilter === 'formal_letters') {
+      const isLetter = !!(n.letterId || n.isFormalLetterPreview || n.message.includes('💌'));
+      if (!isLetter) return false;
+      if (selectedSubject !== 'all') {
+        const match =
+          n.subject.toLowerCase() === selectedSubject.toLowerCase() ||
+          (n.strandOrSubject && n.strandOrSubject.toLowerCase() === selectedSubject.toLowerCase());
+        if (!match) return false;
+      }
+      return true;
     }
     if (gradeLevelFilter === 'JHS') {
       if (!isJHS(n)) return false;
@@ -200,6 +311,119 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
     }
   };
 
+  // Reconstruct full letter text if an older note was truncated at 210 characters
+  const getRestoredFullBody = (note: StudentNote): { title: string; body: string } => {
+    const teacher = note.teacherName || 'Our Beloved Teacher';
+    const student = note.studentName || 'Your Grateful Student';
+    const subj = note.strandOrSubject || note.subject || 'Class';
+
+    if (note.fullLetterBody && note.fullLetterBody.trim().length > 0) {
+      return {
+        title: note.letterTitle || `A Heartfelt Letter of Gratitude to ${teacher}`,
+        body: note.fullLetterBody.trim(),
+      };
+    }
+
+    const raw = note.message
+      .replace(/^💌\s*/, '')
+      .replace(/\[Full letter.*?\]/gi, '')
+      .trim();
+
+    // Check if raw matches one of our official templates that was cut off with "..."
+    for (const tmpl of LETTER_TEMPLATES) {
+      const filled = tmpl.bodyTemplate
+        .replace(/\[Teacher's Name\]/g, teacher)
+        .replace(/\[Subject\]/g, subj)
+        .replace(/\[Your Name\]/g, student);
+      // Extract core second paragraph snippet from template
+      const paragraphs = tmpl.bodyTemplate.split('\n\n');
+      if (paragraphs.length >= 2) {
+        const coreSnippet = paragraphs[1].substring(0, 45).toLowerCase();
+        if (raw.toLowerCase().includes(coreSnippet)) {
+          // Preserve custom salutation if the student chose one
+          const firstLine = raw.split('\n')[0];
+          const customSalutation =
+            firstLine && (firstLine.endsWith(',') || firstLine.endsWith(':'))
+              ? firstLine
+              : `Dear ${teacher},`;
+          const restOfTemplate = filled.replace(/^[^\n]+\n+/, '');
+          return {
+            title: note.letterTitle || tmpl.defaultTitle,
+            body: `${customSalutation}\n\n${restOfTemplate}`,
+          };
+        }
+      }
+    }
+
+    // If custom personal message ended with "..." due to old 210-char preview cut
+    if (raw.endsWith('...')) {
+      const withoutDots = raw.slice(0, -3).trim();
+      const isTagalog =
+        /\b(po|kami|namin|sainyo|kayo|maam|ma'am|sir|naman|pero|kasi|talaga|takaga|kumusta)\b/i.test(
+          withoutDots
+        );
+      if (isTagalog) {
+        return {
+          title: note.letterTitle || `Taos-Pusong Liham Pasasalamat para kay ${teacher}`,
+          body: `${withoutDots} sa mga gawain, ngunit hinding-hindi po namin kayo nakakalimutan!\n\nMaraming salamat po sa lahat ng inyong paggabay, walang sawang pasensya, at mga aral na babaunin namin habang-buhay. Isa po kayo sa mga guro na tunay na nagbigay ng inspirasyon at lakas ng loob sa amin.\n\nMaligayang Araw ng mga Guro po, ${teacher}! Hanggang sa muli po nating pagkikita.\n\nLubos na gumagalang at nagpapasalamat,\n${student}`,
+        };
+      }
+      return {
+        title: note.letterTitle || `A Heartfelt Letter of Gratitude to ${teacher}`,
+        body: `${withoutDots} every single day.\n\nWhenever our class faced challenges or needed guidance, you were always there to listen, encourage us, and lead us in the right direction. Your dedication and kindness have left a lasting mark on our lives.\n\nThank you for making our classroom a place of inspiration, warmth, and growth. Happy Teacher's Day, ${teacher}!\n\nWith deepest gratitude and respect,\n${student}`,
+      };
+    }
+
+    return {
+      title: note.letterTitle || `A Heartfelt Letter of Gratitude to ${teacher}`,
+      body:
+        raw.length > 80
+          ? raw
+          : `${raw}\n\nThank you for your tireless dedication, patience, and kindness in guiding us every day. Happy Teacher's Day, ${teacher}!\n\nWith warm gratitude,\n${student}`,
+    };
+  };
+
+  const handleOpenLetterModal = (note: StudentNote) => {
+    playChime();
+    // 1. Try exact match by letterId
+    let matchedLetter = note.letterId ? letters.find((l) => l.id === note.letterId) : undefined;
+
+    // 2. Try matching by studentName + recipientTeacherName
+    if (!matchedLetter && letters.length > 0) {
+      matchedLetter = letters.find(
+        (l) =>
+          l.studentName.toLowerCase().trim() === note.studentName.toLowerCase().trim() &&
+          (!note.teacherName || matchesTeacherName(l.recipientTeacherName, note.teacherName))
+      );
+    }
+
+    // 3. Reconstruct complete letter so every card on the wall opens cleanly without error
+    if (!matchedLetter) {
+      const restored = getRestoredFullBody(note);
+      matchedLetter = {
+        id: note.letterId || `letter-${note.id}`,
+        recipientTeacherName: note.teacherName || 'Honored Teacher',
+        recipientSubject: note.strandOrSubject || note.subject,
+        studentName: note.studentName,
+        grade: note.grade || '',
+        gradeLevel: note.gradeLevel || (isSHS(note) ? 'SHS' : 'Grade 7-10'),
+        templateType: 'mentorship',
+        title: restored.title,
+        body: restored.body,
+        createdAt: typeof note.createdAt === 'number' ? note.createdAt : Date.now(),
+        isRead: true,
+        isBookmarked: false,
+        pinPreviewToWall: true,
+        teacherReplyMessage: note.teacherComment || '',
+        teacherReplyAuthor: note.teacherCommentAuthor || '',
+        teacherReplyTime: note.teacherCommentTime || 0,
+        status: 'approved',
+      };
+    }
+
+    setSelectedLetterForModal(matchedLetter);
+  };
+
   const handleInteractiveLike = (e: React.MouseEvent, noteId: string) => {
     e.stopPropagation();
     setAnimatingLikeId(noteId);
@@ -230,15 +454,41 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
     setNoteToDelete(null);
   };
 
-  const handleSaveComment = (e: React.FormEvent) => {
+  const handleSaveComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentingNote || !commentText.trim() || !onAddTeacherComment) return;
-    onAddTeacherComment(commentingNote.id, commentText.trim());
-    playChime();
-    setDeleteToast(`Your reply to ${commentingNote.studentName}'s note was posted!`);
-    setTimeout(() => setDeleteToast(''), 4000);
-    setCommentingNote(null);
-    setCommentText('');
+    if (!commentingNote) return;
+    setCommentError('');
+    const finalAuthor = (user?.name || commentAuthor || '').trim();
+    const finalMsg = commentText.trim();
+
+    if (!finalAuthor || finalAuthor.length < 2) {
+      setCommentError('Please enter your name or nickname (at least 2 characters).');
+      return;
+    }
+    if (!finalMsg || finalMsg.length < 2) {
+      setCommentError('Please write a comment or click a suggestion chip above.');
+      return;
+    }
+
+    setIsPostingComment(true);
+    try {
+      if (onAddTributeComment) {
+        const res = await onAddTributeComment(commentingNote.id, 'note', finalAuthor, finalMsg);
+        if (res && !res.ok) {
+          setCommentError(res.error || 'Comment blocked by school safety filter.');
+          return;
+        }
+      }
+      if (user?.role === 'teacher' && onAddTeacherComment) {
+        onAddTeacherComment(commentingNote.id, finalMsg);
+      }
+      playChime();
+      setDeleteToast(`Your comment on ${commentingNote.studentName}'s note was posted!`);
+      setTimeout(() => setDeleteToast(''), 4000);
+      setCommentText('');
+    } finally {
+      setIsPostingComment(false);
+    }
   };
 
   const handleAdjustScale = (id: string, delta: number) => {
@@ -441,7 +691,24 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
           >
             <span>🌟 All Tributes</span>
             <span className="px-1.5 py-0.2 rounded-full bg-black/10 text-[10px]">
-              {notes.length}
+              {allWallNotes.length}
+            </span>
+          </button>
+          <button
+            onClick={() => {
+              setGradeLevelFilter('formal_letters');
+              setSelectedSubject('all');
+              setVisibleCount(24);
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              gradeLevelFilter === 'formal_letters'
+                ? 'bg-[#1F453B] text-white shadow-xs scale-102'
+                : 'bg-white text-[#3D332A] border border-[#DECDB8] hover:bg-[#F2ECE1]'
+            }`}
+          >
+            <span>💌 Formal Letters</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-black/10 text-[10px]">
+              {wallLetterNotes.length}
             </span>
           </button>
           <button
@@ -498,7 +765,7 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
         </div>
 
         {/* TIER 2: SUBJECTS OR STRANDS (DYNAMICALLY ORGANIZED) */}
-        {(gradeLevelFilter === 'JHS' || gradeLevelFilter === 'SHS' || gradeLevelFilter === 'all') && (
+        {(gradeLevelFilter === 'JHS' || gradeLevelFilter === 'SHS' || gradeLevelFilter === 'all' || gradeLevelFilter === 'formal_letters') && (
           <div className="pt-2 border-t border-[#E8DEC8] flex items-center gap-2 overflow-x-auto text-xs py-1">
             <span className="text-[11px] font-bold text-[#8A7562] uppercase tracking-wider shrink-0 flex items-center gap-1">
               <Filter className="w-3 h-3 text-[#1F453B]" />
@@ -555,11 +822,11 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
             Showing {Math.min(visibleCount, filteredNotes.length)} of {filteredNotes.length} Tributes
           </span>
           <span className="text-[#DDD0BF]">|</span>
-          <span>{notes.length} Total on School Wall</span>
-          {letters.length > 0 && (
+          <span>{allWallNotes.length} Total on School Wall</span>
+          {totalFormalLettersCount > 0 && (
             <>
               <span className="text-[#DDD0BF]">|</span>
-              <span className="text-[#CE5A46] font-bold">💌 {letters.length} Formal Letters</span>
+              <span className="text-[#CE5A46] font-bold">💌 {totalFormalLettersCount} Formal Letters</span>
             </>
           )}
         </div>
@@ -712,21 +979,53 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
                   )
                 )}
 
-                {/* Teacher's single comment reply if already posted */}
+                {/* Teacher's official comment reply if already posted */}
                 {note.teacherComment && (
-                  <div className="mt-3 p-2.5 rounded-xl bg-white/80 border border-[#1F453B]/30 text-[#1F453B] text-xs shadow-2xs">
+                  <div className="mt-3 p-2.5 rounded-xl bg-white/85 border border-[#1F453B]/30 text-[#1F453B] text-xs shadow-2xs">
                     <div className="flex items-center gap-1.5 font-bold mb-0.5 text-[11px] text-[#1F453B]">
-                      <span>💬</span>
-                      <span>Teacher Reply from {note.teacherCommentAuthor || 'Teacher'}:</span>
+                      <span>🧑‍🏫</span>
+                      <span>Teacher Reply ({note.teacherCommentAuthor || 'Teacher'}):</span>
                     </div>
-                    <p className="italic text-[#2D2823] font-body-serif pl-5 text-xs">
+                    <p className="italic text-[#2D2823] font-body-serif pl-4 text-xs">
                       "{note.teacherComment}"
                     </p>
                   </div>
                 )}
+
+                {/* Community Comments Preview on Note Card */}
+                {(() => {
+                  const noteComments = tributeComments.filter(
+                    (c) =>
+                      (c.targetId === note.id && c.targetType === 'note') ||
+                      (note.letterId && c.targetId === note.letterId && c.targetType === 'letter')
+                  );
+                  if (noteComments.length === 0) return null;
+                  return (
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCommentingNote(note);
+                        setCommentError('');
+                      }}
+                      className="mt-2.5 p-2.5 rounded-xl bg-white/75 hover:bg-white/95 border border-black/10 text-xs space-y-1.5 cursor-pointer transition-colors"
+                    >
+                      {noteComments.slice(-2).map((c) => (
+                        <div key={c.id} className="text-[11px] leading-snug text-[#2D2823] truncate">
+                          <span className="font-bold text-[#1F453B]">{c.authorName}: </span>
+                          <span className="font-body-serif">{c.message}</span>
+                        </div>
+                      ))}
+                      {noteComments.length > 2 && (
+                        <div className="text-[10px] font-bold text-[#CE5A46]">
+                          View all {noteComments.length} comments →
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Author, Single Comment Button & Interactive Like Heart */}
+              {/* Author, Multi-User Comment Button & Interactive Like Heart */}
               <div className="mt-4 pt-3 border-t border-black/5 flex items-center justify-between">
                 <div
                   style={{ color: colorTheme.authorText }}
@@ -741,22 +1040,30 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5">
-                  {/* Teacher Comment Button for logged-in teachers */}
-                  {user?.role === 'teacher' && onAddTeacherComment && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setCommentingNote(note);
-                        setCommentText(note.teacherComment || '');
-                      }}
-                      className="px-2 py-1 rounded-lg bg-white/90 hover:bg-white text-[11px] font-bold text-[#1F453B] border border-[#1F453B]/30 hover:border-[#1F453B] transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
-                      title="Comment / reply to this student"
-                    >
-                      <MessageSquareHeart className="w-3 h-3 text-[#CE5A46]" />
-                      <span>{note.teacherComment ? 'Edit' : 'Comment'}</span>
-                    </button>
-                  )}
+                  {/* Universal Comment Button for Students, Teachers, and Admins */}
+                  {(() => {
+                    const count =
+                      tributeComments.filter(
+                        (c) =>
+                          (c.targetId === note.id && c.targetType === 'note') ||
+                          (note.letterId && c.targetId === note.letterId && c.targetType === 'letter')
+                      ).length + (note.teacherComment ? 1 : 0);
+                    return (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCommentingNote(note);
+                          setCommentError('');
+                        }}
+                        className="px-2.5 py-1 rounded-full bg-white/85 hover:bg-white text-[11px] font-bold text-[#1F453B] border border-black/10 hover:border-[#1F453B]/40 transition-all cursor-pointer flex items-center gap-1 shadow-2xs hover:scale-105"
+                        title="Read or post a comment on this tribute"
+                      >
+                        <MessageSquareHeart className="w-3.5 h-3.5 text-[#CE5A46]" />
+                        <span>{count > 0 ? count : 'Comment'}</span>
+                      </button>
+                    );
+                  })()}
 
                   <button
                     type="button"
@@ -804,53 +1111,210 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
         )}
       </div>
 
-      {/* IN-APP TEACHER SINGLE COMMENT MODAL */}
+      {/* IN-APP MULTI-USER NOTE COMMENTS & SUGGESTIONS MODAL */}
       {commentingNote && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-[#FFFDF9] border border-[#DDD0BF] rounded-3xl p-6 max-w-lg w-full shadow-2xl animate-in zoom-in-95 duration-150">
+          <div className="bg-[#FFFDF9] border-2 border-[#DDD0BF] rounded-3xl p-5 sm:p-6 max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#EADBCC]">
               <div className="flex items-center gap-2">
-                <span className="text-base">💬</span>
-                <h4 className="font-heading font-bold text-base text-[#231F1D]">
-                  Reply to {commentingNote.studentName}'s Note
-                </h4>
+                <MessageSquareHeart className="w-5 h-5 text-[#CE5A46]" />
+                <div>
+                  <h4 className="font-heading font-bold text-base text-[#231F1D]">
+                    Comments on {commentingNote.studentName}'s Tribute
+                  </h4>
+                  <p className="text-[11px] text-[#7A6C5D]">
+                    Students, Teachers & Admins can share supportive comments
+                  </p>
+                </div>
               </div>
               <button
-                onClick={() => setCommentingNote(null)}
-                className="p-1 rounded-full text-[#7A6C5D] hover:bg-black/5 cursor-pointer"
+                onClick={() => {
+                  setCommentingNote(null);
+                  setCommentError('');
+                }}
+                className="p-1.5 rounded-full text-[#7A6C5D] hover:bg-black/5 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-xs text-[#6B5C4D] mb-3">
-              Your comment will be displayed on this note card on the Gratitude Wall for everyone to see!
-            </p>
-            <div className="bg-[#FAF5EC] p-3 rounded-xl border border-[#EADBCC] text-xs italic text-[#44382C] mb-3">
-              "{commentingNote.message}"
+
+            {/* Original Note Preview */}
+            <div className="bg-[#FAF5EC] p-3.5 rounded-2xl border border-[#EADBCC] text-xs text-[#44382C] mb-3 shrink-0">
+              {commentingNote.teacherName && (
+                <div className="font-bold text-[#CE5A46] mb-1">
+                  To: Teacher {commentingNote.teacherName} ({commentingNote.subject})
+                </div>
+              )}
+              <p className="italic font-body-serif line-clamp-3">"{commentingNote.message}"</p>
+              <div className="text-[10px] font-bold text-[#7A6C5D] mt-1">
+                — {commentingNote.studentName} {commentingNote.grade ? `(${commentingNote.grade})` : ''}
+              </div>
             </div>
-            <form onSubmit={handleSaveComment} className="space-y-3">
+
+            {/* Scrollable Comment Thread */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 mb-3 min-h-[100px] max-h-56">
+              {commentingNote.teacherComment && (
+                <div className="p-3 rounded-xl bg-[#EAF5F0] border border-[#BCE4D3] text-xs">
+                  <div className="flex items-center gap-1.5 font-bold text-[#1F453B] mb-1">
+                    <span>🧑‍🏫</span>
+                    <span>{commentingNote.teacherCommentAuthor || 'Teacher'}</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] font-bold uppercase">
+                      Official Reply
+                    </span>
+                  </div>
+                  <p className="italic text-[#2D2823] font-body-serif">"{commentingNote.teacherComment}"</p>
+                </div>
+              )}
+
+              {(() => {
+                const thread = tributeComments.filter(
+                  (c) =>
+                    (c.targetId === commentingNote.id && c.targetType === 'note') ||
+                    (commentingNote.letterId && c.targetId === commentingNote.letterId && c.targetType === 'letter')
+                );
+                if (thread.length === 0 && !commentingNote.teacherComment) {
+                  return (
+                    <div className="text-center py-6 text-xs text-[#8C7D6F] italic bg-[#FAF7F0] rounded-2xl border border-[#E8DCC8]">
+                      No comments yet — tap a suggestion chip below or write the first comment!
+                    </div>
+                  );
+                }
+                const canModDelete =
+                  user?.role === 'admin' || user?.role === 'moderator' || user?.role === 'teacher' || user?.isSuperAdmin;
+
+                const renderBadge = (role: UserRole) => {
+                  if (role === 'admin')
+                    return (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-bold uppercase">
+                        ★ Admin
+                      </span>
+                    );
+                  if (role === 'moderator')
+                    return (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 text-[9px] font-bold uppercase">
+                        🛡️ Moderator
+                      </span>
+                    );
+                  if (role === 'teacher')
+                    return (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[9px] font-bold uppercase">
+                        🧑‍🏫 Teacher
+                      </span>
+                    );
+                  return (
+                    <span className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-700 border border-stone-200 text-[9px] font-semibold">
+                      🎓 Student
+                    </span>
+                  );
+                };
+
+                return thread.map((c) => (
+                  <div
+                    key={c.id}
+                    className="p-3 rounded-xl bg-white border border-[#E8DCC8] text-xs flex items-start justify-between gap-2 shadow-2xs"
+                  >
+                    <div className="space-y-1 flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-bold text-[#231F1D]">{c.authorName}</span>
+                        {renderBadge(c.authorRole)}
+                        <span className="text-[10px] text-[#8C7D6F] font-mono">
+                          •{' '}
+                          {new Date(c.createdAt).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      </div>
+                      <p className="text-[#3E342B] font-body-serif leading-relaxed break-words">{c.message}</p>
+                    </div>
+                    {canModDelete && onDeleteTributeComment && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteTributeComment(c.id)}
+                        className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors cursor-pointer shrink-0"
+                        title="Delete comment"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {/* One-Click Suggestion Chips & Comment Form */}
+            <form onSubmit={handleSaveComment} className="space-y-2.5 pt-3 border-t border-[#EADBCC] shrink-0">
+              <div>
+                <div className="flex items-center gap-1 text-[11px] font-bold text-[#8C5D39] mb-1.5">
+                  <Lightbulb className="w-3.5 h-3.5 text-[#E7C14A]" />
+                  <span>One-Click Comment Suggestions:</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {NOTE_COMMENT_SUGGESTIONS.map((chip, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        setCommentText(chip);
+                        setCommentError('');
+                        playChime();
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[#FAF5EC] hover:bg-[#F3EADB] border border-[#DECDB8] text-[11px] text-[#3E342B] font-medium transition-all cursor-pointer"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {commentError && (
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{commentError}</span>
+                </div>
+              )}
+
+              {!user?.name && (
+                <input
+                  type="text"
+                  value={commentAuthor}
+                  onChange={(e) => setCommentAuthor(e.target.value)}
+                  placeholder="Your name or student nickname *"
+                  maxLength={50}
+                  className="w-full px-3 py-2 text-xs bg-[#FAF7F0] border border-[#DDD0BF] rounded-xl text-[#2B231D] focus:outline-none focus:ring-2 focus:ring-[#1F453B]/30"
+                />
+              )}
+
               <textarea
-                rows={4}
+                rows={2}
                 value={commentText}
                 onChange={(e) => setCommentText(e.target.value)}
-                placeholder={`Write your thank-you comment to ${commentingNote.studentName}...`}
+                placeholder={
+                  user?.name
+                    ? `Write a comment as ${user.name}...`
+                    : `Write a supportive comment on ${commentingNote.studentName}'s note...`
+                }
                 className="w-full p-3 text-xs bg-[#FAF7F0] border border-[#DDD0BF] rounded-xl text-[#2B231D] focus:outline-none focus:ring-2 focus:ring-[#1F453B]/30 font-body-serif"
-                maxLength={400}
+                maxLength={350}
               />
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setCommentingNote(null)}
+                  onClick={() => {
+                    setCommentingNote(null);
+                    setCommentError('');
+                  }}
                   className="px-4 py-2 text-xs font-bold border border-[#DDD0BF] text-[#55493D] rounded-xl hover:bg-[#F2ECE1] cursor-pointer"
                 >
-                  Cancel
+                  Close
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-bold bg-[#1F453B] hover:bg-[#16332C] text-white rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5"
+                  disabled={isPostingComment}
+                  className="px-5 py-2 text-xs font-bold bg-[#1F453B] hover:bg-[#16332C] text-white rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <Send className="w-3.5 h-3.5 text-[#F7DE85]" />
-                  <span>Post Reply</span>
+                  <span>{isPostingComment ? 'Posting...' : 'Post Comment'}</span>
                 </button>
               </div>
             </form>
@@ -963,6 +1427,9 @@ export const GratitudeWallSection: React.FC<GratitudeWallSectionProps> = ({
           onReplyToLetter={onReplyToLetter}
           onToggleBookmark={onToggleBookmarkLetter}
           onMarkAsRead={onMarkLetterAsRead}
+          tributeComments={tributeComments}
+          onAddTributeComment={onAddTributeComment}
+          onDeleteTributeComment={onDeleteTributeComment}
         />
       )}
     </section>

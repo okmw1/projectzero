@@ -55,6 +55,57 @@ export interface StudentNote {
   flaggedReason?: string;
   letterId?: string;
   isFormalLetterPreview?: boolean;
+  fullLetterBody?: string;
+  letterTitle?: string;
+}
+
+export interface MaintenanceSettings {
+  enabled: boolean;
+  message: string;
+  estimatedReturn: string;
+  updatedAt: number;
+  updatedBy?: string;
+}
+
+export type AnnouncementTheme = 'gold' | 'emerald' | 'rose' | 'parchment';
+
+export interface AnnouncementComment {
+  id: string;
+  authorName: string;
+  authorRole: UserRole;
+  message: string;
+  createdAt: number;
+}
+
+export interface AnnouncementSettings {
+  enabled: boolean;
+  title: string;
+  message: string;
+  senderName: string;
+  theme: AnnouncementTheme;
+  showPopupModal: boolean;
+  triggerConfetti: boolean;
+  updatedAt: number;
+  comments?: AnnouncementComment[];
+}
+
+export interface TributeComment {
+  id: string;
+  targetId: string;
+  targetType: 'note' | 'letter';
+  authorName: string;
+  authorRole: UserRole;
+  message: string;
+  createdAt: number;
+}
+
+export interface CommunitySuggestion {
+  id: string;
+  authorName: string;
+  authorRole: UserRole;
+  category: string;
+  text: string;
+  createdAt: number;
 }
 
 export interface PhotoCard {
@@ -97,3 +148,29 @@ export interface LetterTemplate {
   defaultTitle: string;
   bodyTemplate: string;
 }
+
+export type MusicPlatformType = 'synth' | 'youtube' | 'spotify' | 'soundcloud' | 'custom_url';
+
+export interface MusicTrack {
+  id: string;
+  title: string;
+  subtitle: string;
+  type: MusicPlatformType;
+  presetId?: 'piano_memories' | 'acoustic_gratitude' | 'music_box_bell' | 'lofi_afternoon';
+  url?: string;
+  embedUrl?: string;
+  youtubeId?: string;
+  spotifyKind?: 'track' | 'album' | 'playlist' | 'episode';
+  spotifyId?: string;
+}
+
+export interface MusicBroadcastSettings {
+  queue: MusicTrack[];
+  currentQueueIndex: number;
+  isPlaying: boolean;
+  loopMode: 'queue' | 'one' | 'off';
+  isShuffle: boolean;
+  updatedAt: number;
+  updatedBy?: string;
+}
+

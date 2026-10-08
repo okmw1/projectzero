@@ -1,4 +1,15 @@
-import { StudentNote, PhotoCard, UserRole, StudentLetter } from '../types';
+import {
+  StudentNote,
+  PhotoCard,
+  UserRole,
+  StudentLetter,
+  MaintenanceSettings,
+  AnnouncementSettings,
+  AnnouncementComment,
+  TributeComment,
+  CommunitySuggestion,
+  MusicBroadcastSettings,
+} from '../types';
 
 export type RealtimeEvent =
   | { type: 'NOTE_ADDED'; note: StudentNote }
@@ -16,6 +27,15 @@ export type RealtimeEvent =
   | { type: 'LETTER_BOOKMARKED'; letterId: string; isBookmarked: boolean }
   | { type: 'PHOTO_ADDED'; photo: PhotoCard }
   | { type: 'PHOTO_REMOVED'; photoId: string }
+  | { type: 'MAINTENANCE_UPDATED'; settings: MaintenanceSettings }
+  | { type: 'ANNOUNCEMENT_UPDATED'; settings: AnnouncementSettings }
+  | { type: 'ANNOUNCEMENT_COMMENT_ADDED'; comment: AnnouncementComment }
+  | { type: 'ANNOUNCEMENT_COMMENT_DELETED'; commentId: string }
+  | { type: 'TRIBUTE_COMMENT_ADDED'; comment: TributeComment }
+  | { type: 'TRIBUTE_COMMENT_DELETED'; commentId: string }
+  | { type: 'SUGGESTION_ADDED'; suggestion: CommunitySuggestion }
+  | { type: 'SUGGESTION_DELETED'; suggestionId: string }
+  | { type: 'MUSIC_BROADCAST_UPDATED'; settings: MusicBroadcastSettings }
   | { type: 'PRESENCE_UPDATE'; onlineCount: number; timestamp: number }
   | { type: 'USER_JOINED'; name: string; role: UserRole; timestamp: number }
   | { type: 'PING'; timestamp: number }
@@ -49,8 +69,8 @@ class RealtimeHub {
             this.notifyListeners(messageEvent.data as RealtimeEvent);
           }
         };
-      } catch (err) {
-        console.warn('BroadcastChannel fallback:', err);
+      } catch {
+        // BroadcastChannel fallback
       }
     }
   }
@@ -274,8 +294,8 @@ class RealtimeHub {
     this.listeners.forEach((listener) => {
       try {
         listener(event);
-      } catch (err) {
-        console.error('Error in realtime listener:', err);
+      } catch {
+        // ignore listener error
       }
     });
   }

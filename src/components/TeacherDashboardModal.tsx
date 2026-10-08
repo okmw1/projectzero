@@ -112,18 +112,19 @@ export const TeacherDashboardModal: React.FC<TeacherDashboardModalProps> = ({
   });
 
   // Notes filtering based on Grade Level separation (Grade 7 to SHS)
-  const isJHS = (n: StudentNote) => {
-    if (n.gradeLevel === 'Grade 7-10') return true;
+  const isSHS = (n: StudentNote) => {
+    if (n.isTeacherReply) return false;
+    if (n.gradeLevel === 'SHS') return true;
+    if (n.gradeLevel === 'Grade 7-10') return false;
     const g = (n.grade || '').toLowerCase();
-    if (g.includes('7') || g.includes('8') || g.includes('9') || g.includes('10')) return true;
-    return JHS_SUBJECTS.some((s) => n.subject.toLowerCase().includes(s.name.toLowerCase()));
+    if (g.includes('11') || g.includes('12') || g.includes('shs') || g.includes('senior high')) return true;
+    return SHS_STRANDS.some((s) => n.subject.toLowerCase() === s.name.toLowerCase());
   };
 
-  const isSHS = (n: StudentNote) => {
-    if (n.gradeLevel === 'SHS') return true;
-    const g = (n.grade || '').toLowerCase();
-    if (g.includes('11') || g.includes('12') || g.includes('shs')) return true;
-    return SHS_STRANDS.some((s) => n.subject.toLowerCase().includes(s.name.toLowerCase()));
+  const isJHS = (n: StudentNote) => {
+    if (n.isTeacherReply) return false;
+    if (isSHS(n)) return false;
+    return true;
   };
 
   const filteredNotes = notes.filter((n) => {

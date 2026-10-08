@@ -9,9 +9,9 @@ service cloud.firestore {
     function isValidNote(data) {
       return data.keys().hasAll(['id', 'studentName', 'subject', 'message', 'color', 'likes', 'createdAt'])
         && data.id is string && data.id.size() <= 128
-        && data.studentName is string && data.studentName.size() <= 80
+        && data.studentName is string && data.studentName.size() <= 120
         && data.subject is string && data.subject.size() <= 100
-        && data.message is string && data.message.size() <= 1000
+        && data.message is string && data.message.size() <= 5000
         && data.color in ['blush', 'sky', 'mint', 'sunshine', 'lilac', 'coral']
         && data.likes is number
         && data.createdAt is number;
@@ -20,14 +20,14 @@ service cloud.firestore {
     function isValidLetter(data) {
       return data.keys().hasAll(['id', 'recipientTeacherName', 'recipientSubject', 'studentName', 'title', 'body', 'createdAt', 'isRead'])
         && data.id is string && data.id.size() <= 128
-        && data.recipientTeacherName is string && data.recipientTeacherName.size() <= 100
+        && data.recipientTeacherName is string && data.recipientTeacherName.size() <= 120
         && data.recipientSubject is string && data.recipientSubject.size() <= 100
-        && data.studentName is string && data.studentName.size() <= 80
-        && data.title is string && data.title.size() <= 150
-        && data.body is string && data.body.size() <= 3500
+        && data.studentName is string && data.studentName.size() <= 120
+        && data.title is string && data.title.size() <= 250
+        && data.body is string && data.body.size() <= 10000
         && data.createdAt is number
         && data.isRead is bool
-        && (!('attachedPhoto' in data) || (data.attachedPhoto is string && data.attachedPhoto.size() <= 6000000));
+        && (!('attachedPhoto' in data) || data.attachedPhoto == null || (data.attachedPhoto is string && data.attachedPhoto.size() <= 6000000));
     }
 
     // Gratitude Wall notes collection
@@ -35,6 +35,7 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isValidId(noteId) && isValidNote(request.resource.data);
       allow update: if isValidId(noteId) && (
+        isValidNote(request.resource.data) ||
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'teacherComment', 'teacherCommentAuthor', 'teacherCommentTime', 'status', 'flaggedReason'])
       );
       allow delete: if true;
@@ -68,7 +69,8 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isValidId(letterId) && isValidLetter(request.resource.data);
       allow update: if isValidId(letterId) && (
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'isBookmarked', 'teacherReplyMessage', 'teacherReplyAuthor', 'teacherReplyTime'])
+        isValidLetter(request.resource.data) ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'isBookmarked', 'teacherReplyMessage', 'teacherReplyAuthor', 'teacherReplyTime', 'pinPreviewToWall', 'status'])
       );
       allow delete: if true;
     }

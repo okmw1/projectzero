@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StudentLetter } from '../types';
+import { StudentLetter, TributeComment } from '../types';
 import { X, Mail, Star, Search, Printer, CornerDownRight, Trash2, Paperclip, Send, BookOpen } from 'lucide-react';
 import { CompleteLetterModal } from './CompleteLetterModal.tsx';
 import { playChime } from '../utils/audio';
@@ -16,6 +16,14 @@ interface TeacherMailboxModalProps {
   onReplyToStudent?: (studentName: string) => void;
   onReplyToLetter?: (letterId: string, reply: string) => void;
   onDeleteLetter?: (letterId: string) => void;
+  tributeComments?: TributeComment[];
+  onAddTributeComment?: (
+    targetId: string,
+    targetType: 'note' | 'letter',
+    authorName: string,
+    message: string
+  ) => Promise<{ ok: boolean; error?: string }> | void;
+  onDeleteTributeComment?: (commentId: string) => void;
 }
 
 export const TeacherMailboxModal: React.FC<TeacherMailboxModalProps> = ({
@@ -29,6 +37,9 @@ export const TeacherMailboxModal: React.FC<TeacherMailboxModalProps> = ({
   onReplyToStudent,
   onReplyToLetter,
   onDeleteLetter,
+  tributeComments = [],
+  onAddTributeComment,
+  onDeleteTributeComment,
 }) => {
   const [activeTab, setActiveTab] = useState<'all' | 'unread' | 'bookmarked'>('all');
   const [scope, setScope] = useState<'my' | 'school'>('my');
@@ -526,6 +537,9 @@ export const TeacherMailboxModal: React.FC<TeacherMailboxModalProps> = ({
               if (onDeleteLetter) onDeleteLetter(id);
               setIsFullLetterOpen(false);
             }}
+            tributeComments={tributeComments}
+            onAddTributeComment={onAddTributeComment}
+            onDeleteTributeComment={onDeleteTributeComment}
           />
         )}
       </div>

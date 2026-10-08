@@ -25,9 +25,6 @@ import {
   Lightbulb,
   Palette,
   GraduationCap,
-  Image as ImageIcon,
-  Paperclip,
-  X as XIcon,
 } from 'lucide-react';
 import {
   validateStickyNoteSensor,
@@ -68,8 +65,6 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
   const [recipientTeacher, setRecipientTeacher] = useState<string>('');
   const [letterTitle, setLetterTitle] = useState(LETTER_TEMPLATES[0].defaultTitle);
   const [letterBody, setLetterBody] = useState(LETTER_TEMPLATES[0].bodyTemplate);
-  const [letterPhoto, setLetterPhoto] = useState<string | null>(null);
-  const letterPhotoInputRef = React.useRef<HTMLInputElement>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<
     'mentorship' | 'subject' | 'patience' | 'character' | 'class' | 'creative' | 'adviser' | 'dedication' | 'custom'
   >('mentorship');
@@ -311,8 +306,8 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
       }
       noteStatus = data.status || 'approved';
       flaggedReason = data.flaggedReason || '';
-    } catch (err) {
-      console.warn('Server moderation offline, proceeding with client verification:', err);
+    } catch {
+      // Proceed with client verification
     }
 
     const newNote: StudentNote = {
@@ -425,8 +420,8 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
       }
       letterStatus = data.status || 'approved';
       letterFlaggedReason = data.flaggedReason || '';
-    } catch (err) {
-      console.warn('Server letter moderation offline, proceeding with client verification:', err);
+    } catch {
+      // Proceed with client verification
     }
 
     const newLetter: StudentLetter = {
@@ -443,7 +438,6 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
       isRead: false,
       isBookmarked: false,
       pinPreviewToWall: pinLetterPreview,
-      attachedPhoto: letterPhoto || undefined,
       status: letterStatus,
       flaggedReason: letterFlaggedReason,
     };
@@ -453,15 +447,18 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
     }
     realtimeHub.broadcast({
       type: 'LETTER_SENT',
+      letter: newLetter,
       letterId: newLetter.id,
       studentName: newLetter.studentName,
+      recipientTeacherName: newLetter.recipientTeacherName,
     });
 
     if (pinLetterPreview) {
-      const excerpt =
-        letterBody.length > 220
-          ? `${letterBody.substring(0, 210).trim()}...`
-          : letterBody;
+      const fullBodyText = letterBody.trim();
+      const cardText =
+        fullBodyText.length > 4500
+          ? `${fullBodyText.substring(0, 4495).trim()}...`
+          : fullBodyText;
 
       const previewNote: StudentNote = {
         id: `note-from-letter-${Date.now()}`,
@@ -471,7 +468,7 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
         gradeLevel,
         strandOrSubject: selectedSubject,
         subject: selectedSubject.toUpperCase(),
-        message: `💌 ${excerpt}`,
+        message: `💌 ${cardText}`,
         color: 'lilac',
         likes: 1,
         createdAt: Date.now(),
@@ -479,6 +476,8 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
         flaggedReason: letterFlaggedReason,
         letterId: newLetter.id,
         isFormalLetterPreview: true,
+        fullLetterBody: fullBodyText,
+        letterTitle: letterTitle.trim(),
       };
       onAddNote(previewNote, true);
       realtimeHub.broadcast({ type: 'NOTE_ADDED', note: previewNote });
@@ -492,7 +491,6 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
       colors: ['#E7C14A', '#CE5A46', '#1F453B', '#FCECEB'],
     });
 
-    setLetterPhoto(null);
     setSubmittedType('letter');
     setSensorWarnings([]);
     setJustSubmitted(true);
@@ -755,17 +753,26 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
 
             {/* Note Suggestions Chips Bar */}
             <div className="bg-[#FAF5EC] p-3.5 sm:p-4 rounded-2xl border border-[#E4D5C2]">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-[#8C5D39] mb-2.5">
-                <Lightbulb className="w-3.5 h-3.5 text-[#E7C14A]" />
-                <span className="uppercase tracking-wider">Need Inspiration? Tap any idea to fill your note:</span>
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[#8C5D39]">
+                  <Lightbulb className="w-3.5 h-3.5 text-[#E7C14A]" />
+                  <span className="uppercase tracking-wider">Smart Suggestion Phrases (Click to Insert or Append):</span>
+                </div>
+                <span className="text-[10px] font-semibold text-[#7A6C5D] bg-white px-2 py-0.5 rounded-full border border-[#DECDB8]">
+                  ✨ One-Click Note Suggestions
+                </span>
               </div>
               <div className="flex flex-wrap gap-2">
-                {NOTE_SUGGESTION_CHIPS.slice(0, 8).map((suggestion, idx) => (
+                {NOTE_SUGGESTION_CHIPS.map((suggestion, idx) => (
                   <button
                     key={idx}
                     type="button"
                     onClick={() => {
-                      setMessage(suggestion);
+                      setMessage((prev) =>
+                        prev.trim() && !prev.includes(suggestion)
+                          ? `${prev.trim()} ${suggestion}`.slice(0, 500)
+                          : suggestion
+                      );
                       playChime();
                       if (sensorWarnings.length > 0) setSensorWarnings([]);
                     }}
@@ -1199,104 +1206,6 @@ export const WriteNoteSection: React.FC<WriteNoteSectionProps> = ({
                 <div className="mt-2 p-2.5 rounded-xl bg-[#FFF8E6] border border-[#E7C14A] text-[#805000] text-xs font-semibold flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4 shrink-0 text-[#B87A00]" />
                   <span>{liveLetterBodyWarning}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Optional Attached Keepsake Photo */}
-            <div className="bg-[#FAF7F0] border border-[#E2D5C3] rounded-2xl p-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
-                <div>
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#1F453B] uppercase tracking-wider">
-                    <Paperclip className="w-4 h-4 text-[#1F453B]" />
-                    <span>Attach Keepsake Photo or Memory (Optional)</span>
-                  </div>
-                  <p className="text-[11px] text-[#786959] mt-0.5">
-                    Private attachment: only you and your teacher will see this photo in their mailbox.
-                  </p>
-                </div>
-                <div>
-                  <input
-                    type="file"
-                    ref={letterPhotoInputRef}
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      if (file.size > 6 * 1024 * 1024) {
-                        setErrorMessage('Photo size should be under 6MB.');
-                        return;
-                      }
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        const img = new window.Image();
-                        img.onload = () => {
-                          const canvas = document.createElement('canvas');
-                          let width = img.width;
-                          let height = img.height;
-                          const maxDim = 850;
-                          if (width > height && width > maxDim) {
-                            height = Math.round((height * maxDim) / width);
-                            width = maxDim;
-                          } else if (height > maxDim) {
-                            width = Math.round((width * maxDim) / height);
-                            height = maxDim;
-                          }
-                          canvas.width = width;
-                          canvas.height = height;
-                          const ctx = canvas.getContext('2d');
-                          ctx?.drawImage(img, 0, 0, width, height);
-                          const compressed = canvas.toDataURL('image/jpeg', 0.84);
-                          setLetterPhoto(compressed);
-                          playChime();
-                        };
-                        img.src = reader.result as string;
-                      };
-                      reader.readAsDataURL(file);
-                    }}
-                    className="hidden"
-                  />
-                  {!letterPhoto ? (
-                    <button
-                      type="button"
-                      onClick={() => letterPhotoInputRef.current?.click()}
-                      className="px-3 py-1.5 rounded-xl bg-white border border-[#DDD0BF] text-xs font-bold text-[#1F453B] hover:bg-[#F2ECE1] transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                    >
-                      <ImageIcon className="w-3.5 h-3.5 text-[#1F453B]" />
-                      <span>Upload Photo</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLetterPhoto(null);
-                        if (letterPhotoInputRef.current) letterPhotoInputRef.current.value = '';
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-red-50 border border-red-200 text-xs font-bold text-red-700 hover:bg-red-100 transition-colors flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <XIcon className="w-3.5 h-3.5" />
-                      <span>Remove Photo</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {letterPhoto && (
-                <div className="mt-3 p-3 bg-white rounded-xl border border-[#DECDB8] flex items-center gap-3">
-                  <img
-                    src={letterPhoto}
-                    alt="Attached keepsake preview"
-                    className="w-16 h-16 object-cover rounded-lg border border-[#DDD0BF] shadow-2xs"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-bold text-[#2D2823] flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-green-500" />
-                      <span>Photo Attached to Letter</span>
-                    </div>
-                    <p className="text-[11px] text-[#7A6C5D] mt-0.5">
-                      This photo will be sealed inside your private letter to {recipientTeacher.trim() || 'your teacher'}.
-                    </p>
-                  </div>
                 </div>
               )}
             </div>
